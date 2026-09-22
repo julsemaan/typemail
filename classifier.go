@@ -224,6 +224,7 @@ func validateResponse(response classifyResponse) (Result, bool, error) {
 	}
 
 	probabilities := make(map[Class]float64, len(answer.Probabilities))
+	var probabilitySum float64
 	for name, probability := range answer.Probabilities {
 		class, ok := parseClass(name)
 		if !ok {
@@ -232,7 +233,11 @@ func validateResponse(response classifyResponse) (Result, bool, error) {
 		if math.IsNaN(probability) || math.IsInf(probability, 0) || probability < 0 || probability > 1 {
 			return Result{}, false, errors.New("openrouter response has an invalid probability")
 		}
+		probabilitySum += probability
 		probabilities[class] = probability
+	}
+	if math.Abs(probabilitySum-1) > 1e-6 {
+		return Result{}, false, errors.New("openrouter response probabilities do not sum to one")
 	}
 	if len(probabilities) != len(classCriteria) {
 		return Result{}, false, errors.New("openrouter response has duplicate probability classes")

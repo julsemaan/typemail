@@ -120,6 +120,9 @@ func TestClassifierRejectsInvalidAnswers(t *testing.T) {
 		{name: "invalid probability", mutate: func(response map[string]any) {
 			response["answers"].(map[string]any)[questionID].(map[string]any)["probabilities"].(map[string]float64)["spam"] = 1.1
 		}},
+		{name: "probabilities do not sum", mutate: func(response map[string]any) {
+			response["answers"].(map[string]any)[questionID].(map[string]any)["probabilities"].(map[string]float64)["spam"] = 0.2
+		}},
 		{name: "missing probability", mutate: func(response map[string]any) {
 			delete(response["answers"].(map[string]any)[questionID].(map[string]any)["probabilities"].(map[string]float64), "spam")
 		}},
