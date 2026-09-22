@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net/textproto"
 	"strings"
 
 	_ "github.com/emersion/go-message/charset"
@@ -23,15 +22,15 @@ type TextPart struct {
 	Text        string
 }
 
-var selectedHeaders = map[string]struct{}{
-	"From":                   {},
-	"Reply-To":               {},
-	"To":                     {},
-	"Subject":                {},
-	"Date":                   {},
-	"List-Id":                {},
-	"List-Unsubscribe":       {},
-	"Authentication-Results": {},
+var selectedHeaders = map[string]string{
+	"from":                   "From",
+	"reply-to":               "Reply-To",
+	"to":                     "To",
+	"subject":                "Subject",
+	"date":                   "Date",
+	"list-id":                "List-ID",
+	"list-unsubscribe":       "List-Unsubscribe",
+	"authentication-results": "Authentication-Results",
 }
 
 // ParseMessage parses an RFC 822 message, excluding attachments and limiting
@@ -52,8 +51,8 @@ func ParseMessage(r io.Reader, maxTextBytes int64) (Message, error) {
 	result := Message{Headers: make(map[string][]string)}
 	fields := reader.Header.Fields()
 	for fields.Next() {
-		key := textproto.CanonicalMIMEHeaderKey(fields.Key())
-		if _, ok := selectedHeaders[key]; !ok {
+		key, ok := selectedHeaders[strings.ToLower(fields.Key())]
+		if !ok {
 			continue
 		}
 		value, err := fields.Text()

@@ -21,7 +21,7 @@ func (r *trackingReader) Read(p []byte) (int, error) {
 }
 
 func TestParseMessagePlainText(t *testing.T) {
-	message, err := ParseMessage(strings.NewReader("From: sender@example.com\r\nSubject: Hello\r\n\r\nBody text"), 100)
+	message, err := ParseMessage(strings.NewReader("From: sender@example.com\r\nList-ID: <list.example>\r\nSubject: Hello\r\n\r\nBody text"), 100)
 	if err != nil {
 		t.Fatalf("ParseMessage() error = %v", err)
 	}
@@ -30,6 +30,9 @@ func TestParseMessagePlainText(t *testing.T) {
 	}
 	if got := message.Headers["Subject"]; len(got) != 1 || got[0] != "Hello" {
 		t.Fatalf("Subject = %#v", got)
+	}
+	if got := message.Headers["List-ID"]; len(got) != 1 || got[0] != "<list.example>" {
+		t.Fatalf("List-ID = %#v", got)
 	}
 	if len(message.TextParts) != 1 || message.TextParts[0].ContentType != "text/plain" || message.TextParts[0].Text != "Body text" {
 		t.Fatalf("TextParts = %#v", message.TextParts)
