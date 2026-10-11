@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	defaultConcurrency = 5
-	maxTextBytes       = 100 << 10
+	defaultConcurrency   = 5
+	defaultMaxEmailBytes = 16 << 10
 )
 
 var errMessageFailures = errors.New("one or more messages failed")
@@ -33,6 +33,8 @@ type config struct {
 	imapPassword  string
 	openRouterKey string
 	concurrency   int
+	maxEmailBytes int64
+	debug         bool
 }
 
 func loadConfig(args []string, getenv func(string) string) (config, error) {
@@ -43,11 +45,16 @@ func loadConfig(args []string, getenv func(string) string) (config, error) {
 	flags := flag.NewFlagSet("typemail", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	concurrency := flags.Int("concurrency", defaultConcurrency, "maximum concurrent classifications")
+	maxEmailBytes := flags.Int64("max-email-bytes", defaultMaxEmailBytes, "maximum combined decoded email body bytes")
+	debug := flags.Bool("debug", false, "print HTTP diagnostics that may include email content")
 	if err := flags.Parse(args); err != nil {
 		return config{}, fmt.Errorf("parse flags: %w", err)
 	}
 	if *concurrency < 1 {
 		return config{}, errors.New("concurrency must be at least 1")
+	}
+	if *maxEmailBytes < 1 {
+		return config{}, errors.New("max-email-bytes must be at least 1")
 	}
 
 	values := make(map[string]string, 4)
@@ -70,6 +77,8 @@ func loadConfig(args []string, getenv func(string) string) (config, error) {
 		imapPassword:  values["TYPEMAIL_IMAP_PASSWORD"],
 		openRouterKey: values["OPENROUTER_API_KEY"],
 		concurrency:   *concurrency,
+		maxEmailBytes: *maxEmailBytes,
+		debug:         *debug,
 	}, nil
 }
 
@@ -138,7 +147,7 @@ func startWorkers(ctx context.Context, concurrency int, jobs <-chan classificati
 	return results
 }
 
-func fetchMessage(ctx context.Context, client *imapclient.Client, uid imap.UID) (typemail.Message, error) {
+func fetchMessage(ctx context.Context, client *imapclient.Client, uid imap.UID, maxEmailBytes int64) (typemail.Message, error) {
 	if err := ctx.Err(); err != nil {
 		return typemail.Message{}, err
 	}
@@ -168,7 +177,7 @@ func fetchMessage(ctx context.Context, client *imapclient.Client, uid imap.UID) 
 				parseErr = errors.New("IMAP returned an empty message body")
 				continue
 			}
-			message, parseErr = typemail.ParseMessage(body.Literal, maxTextBytes)
+			message, parseErr = typemail.ParseMessage(body.Literal, maxEmailBytes)
 		}
 	}
 	closeErr := command.Close()
@@ -207,7 +216,7 @@ type runSummary struct {
 	total    int
 }
 
-func outputResults(stdout, stderr io.Writer, results <-chan classificationResult) runSummary {
+func outputResults(stdout, stderr io.Writer, results <-chan classificationResult, debug bool) runSummary {
 	writer := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 	_, _ = fmt.Fprintln(writer, "UID\tFROM\tSUBJECT\tCLASS\tCONFIDENCE")
 	summary := runSummary{counts: make(map[typemail.Class]int)}
@@ -216,6 +225,17 @@ func outputResults(stdout, stderr io.Writer, results <-chan classificationResult
 		if result.err != nil {
 			summary.failures++
 			_, _ = fmt.Fprintf(stderr, "UID %d: %v\n", result.uid, result.err)
+			if debug {
+				var detail *typemail.HTTPError
+				if errors.As(result.err, &detail) {
+					explanation := "message=" + detail.Message
+					if detail.DetailsUnavailable != "" {
+						explanation = "details unavailable: " + detail.DetailsUnavailable
+					}
+					_, _ = fmt.Fprintf(stderr, "UID %d: HTTP diagnostics model=%s state_bytes=%d request_bytes=%d %s\n",
+						result.uid, sanitizeField(detail.Model), detail.StateBytes, detail.RequestBytes, sanitizeField(explanation))
+				}
+			}
 			continue
 		}
 		summary.counts[result.result.Class]++
@@ -289,7 +309,7 @@ func run(ctx context.Context, cfg config, stdout, stderr io.Writer) error {
 			if ctx.Err() != nil {
 				return
 			}
-			message, err := fetchMessage(ctx, client, uid)
+			message, err := fetchMessage(ctx, client, uid, cfg.maxEmailBytes)
 			job := classificationJob{uid: uid, err: err}
 			if err == nil {
 				job.message = message
@@ -304,7 +324,7 @@ func run(ctx context.Context, cfg config, stdout, stderr io.Writer) error {
 		}
 	}()
 
-	summary := outputResults(stdout, stderr, results)
+	summary := outputResults(stdout, stderr, results, cfg.debug)
 	writeSummary(stdout, summary)
 	if err := ctx.Err(); err != nil {
 		return err

@@ -18,9 +18,20 @@ Run the scanner:
 ```sh
 go run ./cmd/typemail
 go run ./cmd/typemail -concurrency 10
+go run ./cmd/typemail -max-email-bytes 8192
 ```
 
 The default concurrency is five. Values below one are rejected. A message fetch or classification failure is printed to stderr, scanning continues, and the command exits nonzero after the summary.
+
+## HTTP diagnostics
+
+Provider explanations are hidden by default. To print HTTP failure details alongside each failed UID, including the requested model and state and serialized request byte counts, run:
+
+```sh
+go run ./cmd/typemail -debug
+```
+
+Diagnostics decode only the provider's `error.message` from responses up to 4 KiB and redact the configured API key. Unavailable details have a reason instead of raw response content. Provider explanations may quote submitted email content. Do not share diagnostic output without reviewing it.
 
 ## Classification categories
 
@@ -36,7 +47,7 @@ Each successful result includes the selected class, confidence, all five probabi
 
 The CLI selects `INBOX` with IMAP `EXAMINE` and fetches messages with `BODY.PEEK[]`. It does not set flags, rewrite messages, move mail, or delete mail. IMAP fetching and MIME parsing are sequential. Only OpenRouter calls run concurrently.
 
-The parser decodes MIME headers, transfer encodings, and supported character sets. It keeps inline `text/plain` and `text/html` parts, ignores attachments, and caps the combined decoded text at 100 KiB. It drains the source after reaching the cap so the IMAP connection can be reused.
+The parser decodes MIME headers, transfer encodings, and supported character sets. It keeps inline `text/plain` and `text/html` parts and ignores attachments. The CLI keeps the first 16,384 bytes of combined decoded body text in MIME order by default. Use `-max-email-bytes` to change this limit; values below one are rejected. The limit excludes headers and JSON overhead. The parser drains the source after reaching the cap so the IMAP connection can be reused.
 
 The scanner sends a `POST` request to `https://openrouter.ai/api/v1/systemone` using the `~typesafe/jev-latest` model. The following headers are sent with the decoded inline body text to OpenRouter and TypeSafe: `From`, `Reply-To`, `To`, `Subject`, `Date`, `List-ID`, `List-Unsubscribe`, and `Authentication-Results`. Email content is treated as data for classification, not as instructions to the classifier.
 
@@ -47,6 +58,8 @@ message, err := typemail.ParseMessage(reader, 100<<10)
 classifier, err := typemail.NewClassifier(apiKey)
 result, err := classifier.Classify(ctx, message)
 ```
+
+Library callers choose their own body limit through the `ParseMessage` argument; the CLI default does not apply.
 
 The library uses `github.com/emersion/go-imap/v2` for IMAP integration and `github.com/emersion/go-message` for RFC 822 and MIME parsing. It does not include an OpenRouter SDK.
 
@@ -65,7 +78,7 @@ The library uses `github.com/emersion/go-imap/v2` for IMAP integration and `gith
 
 ```sh
 gofmt -w .
-go test ./...
+go test -race ./...
 go vet ./...
 ```
 

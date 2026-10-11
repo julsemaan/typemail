@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -42,6 +43,82 @@ func TestLoadConfigHonorsExplicitConcurrency(t *testing.T) {
 	}
 	if cfg.concurrency != 10 {
 		t.Fatalf("concurrency = %d, want 10", cfg.concurrency)
+	}
+}
+
+func TestLoadConfigMaxEmailBytes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want int64
+	}{
+		{name: "default", want: 16384},
+		{name: "override", args: []string{"-max-email-bytes", "8192"}, want: 8192},
+		{name: "minimum", args: []string{"-max-email-bytes", "1"}, want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := loadConfig(tc.args, testEnvironment(completeEnvironment()))
+			if err != nil {
+				t.Fatalf("loadConfig() error = %v", err)
+			}
+			if cfg.maxEmailBytes != tc.want {
+				t.Fatalf("maxEmailBytes = %d, want %d", cfg.maxEmailBytes, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadConfigRejectsInvalidMaxEmailBytes(t *testing.T) {
+	for _, value := range []string{"0", "-1", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := loadConfig([]string{"-max-email-bytes", value}, testEnvironment(completeEnvironment())); err == nil {
+				t.Fatal("loadConfig() error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestLoadConfigDebugIsOptIn(t *testing.T) {
+	for _, debug := range []bool{false, true} {
+		var args []string
+		if debug {
+			args = []string{"-debug"}
+		}
+		cfg, err := loadConfig(args, testEnvironment(completeEnvironment()))
+		if err != nil || cfg.debug != debug {
+			t.Fatalf("loadConfig(%v) = %#v, %v", args, cfg, err)
+		}
+	}
+}
+
+func TestOutputHTTPDiagnostics(t *testing.T) {
+	for _, debug := range []bool{false, true} {
+		input := make(chan classificationResult, 4)
+		input <- classificationResult{uid: 64866, err: fmt.Errorf("classify: %w", &typemail.HTTPError{
+			StatusCode: 400, Message: "private email\x1b[31m\nforged\r\t\u009b", Model: "jev\nmodel", StateBytes: 123, RequestBytes: 456,
+		})}
+		input <- classificationResult{uid: 64867, err: &typemail.HTTPError{StatusCode: 400, DetailsUnavailable: "malformed error response"}}
+		input <- classificationResult{uid: 9, err: errors.New("parse failed")}
+		input <- classificationResult{uid: 10, from: "sender", subject: "subject", result: typemail.Result{Class: typemail.ClassSpam, Confidence: 0.94}}
+		close(input)
+		var stdout, stderr bytes.Buffer
+		summary := outputResults(&stdout, &stderr, input, debug)
+		writeSummary(&stdout, summary)
+		if summary.total != 4 || summary.failures != 3 || summary.counts[typemail.ClassSpam] != 1 || !strings.Contains(stdout.String(), "Failures: 3") || !strings.Contains(stdout.String(), "0.94") {
+			t.Fatalf("summary = %#v, stdout = %q", summary, stdout.String())
+		}
+		if debug {
+			for _, want := range []string{"UID 64866: HTTP diagnostics", "model=jev model", "state_bytes=123", "request_bytes=456", "message=private email [31m forged", "UID 64867: HTTP diagnostics", "details unavailable: malformed error response"} {
+				if !strings.Contains(stderr.String(), want) {
+					t.Errorf("stderr missing %q: %q", want, stderr.String())
+				}
+			}
+			if strings.Count(stderr.String(), "\n") != 5 || strings.ContainsAny(stderr.String(), "\x1b\r\t\u009b") {
+				t.Fatalf("unsafe stderr = %q", stderr.String())
+			}
+		} else if strings.Contains(stderr.String(), "private email") || strings.Contains(stderr.String(), "malformed error response") || strings.Contains(stderr.String(), "state_bytes") {
+			t.Fatalf("default stderr leaks diagnostics: %q", stderr.String())
+		}
 	}
 }
 
@@ -133,7 +210,7 @@ func TestWorkerErrorsReachFinalSummary(t *testing.T) {
 	results := startWorkers(context.Background(), 1, input, nil)
 
 	var stdout, stderr bytes.Buffer
-	summary := outputResults(&stdout, &stderr, results)
+	summary := outputResults(&stdout, &stderr, results, false)
 	writeSummary(&stdout, summary)
 	if summary.failures != 1 {
 		t.Fatalf("failures = %d, want 1", summary.failures)
@@ -160,7 +237,7 @@ func TestOutputReplacesTerminalControlCharacters(t *testing.T) {
 	close(input)
 
 	var stdout, stderr bytes.Buffer
-	outputResults(&stdout, &stderr, input)
+	outputResults(&stdout, &stderr, input, false)
 	if strings.Contains(stdout.String(), "\x1b") || strings.Contains(stdout.String(), "\r") {
 		t.Fatalf("stdout contains terminal controls: %q", stdout.String())
 	}

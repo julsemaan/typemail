@@ -38,6 +38,21 @@ type Result struct {
 	Model         string
 }
 
+// HTTPError retains opt-in diagnostics for a failed OpenRouter request.
+// Message may quote submitted email content. Error returns only the HTTP status.
+type HTTPError struct {
+	StatusCode         int
+	Message            string
+	DetailsUnavailable string
+	Model              string
+	StateBytes         int
+	RequestBytes       int
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("openrouter request returned HTTP %d", e.StatusCode)
+}
+
 // Classifier sends bounded email representations to OpenRouter's TypeSafe API.
 type Classifier struct {
 	apiKey   string
@@ -119,9 +134,10 @@ func (c *Classifier) Classify(ctx context.Context, message Message) (Result, err
 		return Result{}, errors.New("classifier is not configured")
 	}
 
+	state := formatState(message)
 	requestBody, err := json.Marshal(classifyRequest{
 		Model: c.model,
-		State: formatState(message),
+		State: state,
 		Questions: map[string]choiceQuestion{
 			questionID: {
 				Type:         "choice",
@@ -135,7 +151,7 @@ func (c *Classifier) Classify(ctx context.Context, message Message) (Result, err
 	}
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		result, retry, err := c.doRequest(ctx, requestBody)
+		result, retry, err := c.doRequest(ctx, requestBody, len(state))
 		if err == nil {
 			return result, nil
 		}
@@ -149,7 +165,7 @@ func (c *Classifier) Classify(ctx context.Context, message Message) (Result, err
 	return Result{}, errors.New("classifier request failed")
 }
 
-func (c *Classifier) doRequest(ctx context.Context, body []byte) (Result, bool, error) {
+func (c *Classifier) doRequest(ctx context.Context, body []byte, stateBytes int) (Result, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return Result{}, false, fmt.Errorf("create classifier request: %w", err)
@@ -167,11 +183,15 @@ func (c *Classifier) doRequest(ctx context.Context, body []byte) (Result, bool, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorResponseBytes))
-		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-			return Result{}, true, fmt.Errorf("openrouter request returned HTTP %d", resp.StatusCode)
+		detail := &HTTPError{
+			StatusCode:   resp.StatusCode,
+			Model:        c.model,
+			StateBytes:   stateBytes,
+			RequestBytes: len(body),
 		}
-		return Result{}, false, fmt.Errorf("openrouter request returned HTTP %d", resp.StatusCode)
+		detail.Message, detail.DetailsUnavailable = readErrorMessage(resp.Body, c.apiKey)
+		retry := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		return Result{}, retry, detail
 	}
 
 	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
@@ -187,6 +207,31 @@ func (c *Classifier) doRequest(ctx context.Context, body []byte) (Result, bool, 
 		return Result{}, false, errors.New("decode openrouter response failed")
 	}
 	return validateResponse(response)
+}
+
+func readErrorMessage(body io.Reader, apiKey string) (string, string) {
+	data, err := io.ReadAll(io.LimitReader(body, maxErrorResponseBytes+1))
+	if err != nil {
+		return "", "could not read error response"
+	}
+	if len(data) > maxErrorResponseBytes {
+		return "", "error response exceeds 4096 bytes"
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return "", "empty error response"
+	}
+	var response struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return "", "malformed error response"
+	}
+	if strings.TrimSpace(response.Error.Message) == "" {
+		return "", "error response has no message"
+	}
+	return strings.ReplaceAll(response.Error.Message, apiKey, "[redacted]"), ""
 }
 
 func waitRetry(ctx context.Context, attempt int) error {
