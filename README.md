@@ -83,3 +83,4 @@ go vet ./...
 ```
 
 A real-mailbox check is still required to verify the IMAP server's read-only behavior and credentials.
+# typemail
