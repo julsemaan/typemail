@@ -1,0 +1,3 @@
+- Support other providers than openrouter
+- Configurable classes of emails
+- Structure the code in packages and beyond a prototype
