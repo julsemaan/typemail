@@ -24,10 +24,10 @@ const (
 	ClassSpam Class = "spam"
 	// ClassPhishing is deceptive mail seeking credentials, money, sensitive data, or harmful actions.
 	ClassPhishing Class = "phishing"
-	// ClassMarketing is promotional mail or newsletters from an identifiable sender.
-	ClassMarketing Class = "marketing"
 	// ClassSuspicious is concerning or ambiguous mail that does not clearly fit another class.
 	ClassSuspicious Class = "suspicious"
+	// ClassSelling
+	ClassSelling Class = "selling"
 )
 
 // Result is the classification and probability distribution returned by Jev.
@@ -73,7 +73,7 @@ const (
 
 var classCriteria = map[string]string{
 	string(ClassLegitimate): "Expected personal, business, or transactional correspondence.",
-	string(ClassMarketing):  "Promotional mail or newsletters from an identifiable sender.",
+	string(ClassSelling):    "Email that sollicits or promotes a purchase of a consumer product",
 	string(ClassSpam):       "Unwanted bulk mail, generic solicitation, or low-quality junk.",
 	string(ClassPhishing):   "Deceptive requests for credentials, money, sensitive data, or harmful actions.",
 	string(ClassSuspicious): "Concerning or ambiguous mail that does not clearly fit another class.",
