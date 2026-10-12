@@ -1,0 +1,20 @@
+# Copy to typemail.toml and load with:
+# go run ./cmd/typemail -config typemail.toml
+# All sections are commented out, so this file preserves the built-in defaults.
+# Uncomment a section and its settings to apply it.
+
+# Replace the selling class's criteria entirely.
+# [classes.selling]
+# criteria = """
+# Emails promoting purchases.
+# Exclude purchase confirmations and receipts.
+# """
+
+# Disable a built-in class.
+# [classes.suspicious]
+# enabled = false
+
+# Add a custom class. Criteria are required even when enabled = false.
+# [classes.receipts]
+# enabled = true
+# criteria = "Purchase confirmations, invoices, and payment receipts."

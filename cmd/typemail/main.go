@@ -14,6 +14,7 @@ import (
 	"text/tabwriter"
 	"unicode"
 
+	"github.com/BurntSushi/toml"
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 	"typemail"
@@ -28,13 +29,14 @@ var errMessageFailures = errors.New("one or more messages failed")
 
 // config contains validated command-line and environment configuration.
 type config struct {
-	imapAddr      string
-	imapUsername  string
-	imapPassword  string
-	openRouterKey string
-	concurrency   int
-	maxEmailBytes int64
-	debug         bool
+	imapAddr         string
+	imapUsername     string
+	imapPassword     string
+	openRouterKey    string
+	concurrency      int
+	maxEmailBytes    int64
+	debug            bool
+	classifierConfig typemail.ClassifierConfig
 }
 
 func loadConfig(args []string, getenv func(string) string) (config, error) {
@@ -47,6 +49,7 @@ func loadConfig(args []string, getenv func(string) string) (config, error) {
 	concurrency := flags.Int("concurrency", defaultConcurrency, "maximum concurrent classifications")
 	maxEmailBytes := flags.Int64("max-email-bytes", defaultMaxEmailBytes, "maximum combined decoded email body bytes")
 	debug := flags.Bool("debug", false, "print HTTP diagnostics that may include email content")
+	configPath := flags.String("config", "", "path to classifier TOML configuration")
 	if err := flags.Parse(args); err != nil {
 		return config{}, fmt.Errorf("parse flags: %w", err)
 	}
@@ -55,6 +58,23 @@ func loadConfig(args []string, getenv func(string) string) (config, error) {
 	}
 	if *maxEmailBytes < 1 {
 		return config{}, errors.New("max-email-bytes must be at least 1")
+	}
+
+	var classifierConfig typemail.ClassifierConfig
+	if *configPath != "" {
+		metadata, err := toml.DecodeFile(*configPath, &classifierConfig)
+		if err != nil {
+			return config{}, fmt.Errorf("decode config %q: %w", *configPath, err)
+		}
+		if keys := metadata.Undecoded(); len(keys) > 0 {
+			return config{}, fmt.Errorf("config %q: unknown keys: %v", *configPath, keys)
+		}
+		// TOML struct decoding ignores case, but setting names must match exactly.
+		for _, key := range metadata.Keys() {
+			if key[0] != "classes" || (len(key) >= 3 && key[2] != "enabled" && key[2] != "criteria") {
+				return config{}, fmt.Errorf("config %q: unknown key: %s", *configPath, key)
+			}
+		}
 	}
 
 	values := make(map[string]string, 4)
@@ -72,13 +92,14 @@ func loadConfig(args []string, getenv func(string) string) (config, error) {
 	}
 
 	return config{
-		imapAddr:      values["TYPEMAIL_IMAP_ADDR"],
-		imapUsername:  values["TYPEMAIL_IMAP_USERNAME"],
-		imapPassword:  values["TYPEMAIL_IMAP_PASSWORD"],
-		openRouterKey: values["OPENROUTER_API_KEY"],
-		concurrency:   *concurrency,
-		maxEmailBytes: *maxEmailBytes,
-		debug:         *debug,
+		imapAddr:         values["TYPEMAIL_IMAP_ADDR"],
+		imapUsername:     values["TYPEMAIL_IMAP_USERNAME"],
+		imapPassword:     values["TYPEMAIL_IMAP_PASSWORD"],
+		openRouterKey:    values["OPENROUTER_API_KEY"],
+		concurrency:      *concurrency,
+		maxEmailBytes:    *maxEmailBytes,
+		debug:            *debug,
+		classifierConfig: classifierConfig,
 	}, nil
 }
 
@@ -251,23 +272,17 @@ func outputResults(stdout, stderr io.Writer, results <-chan classificationResult
 	return summary
 }
 
-func writeSummary(w io.Writer, summary runSummary) {
+func writeSummary(w io.Writer, summary runSummary, active []typemail.Class) {
 	_, _ = fmt.Fprintln(w, "\nTotals:")
 	_, _ = fmt.Fprintf(w, "Messages: %d\n", summary.total)
-	for _, class := range []typemail.Class{
-		typemail.ClassLegitimate,
-		typemail.ClassSpam,
-		typemail.ClassPhishing,
-		typemail.ClassMarketing,
-		typemail.ClassSuspicious,
-	} {
+	for _, class := range active {
 		_, _ = fmt.Fprintf(w, "%s: %d\n", class, summary.counts[class])
 	}
 	_, _ = fmt.Fprintf(w, "Failures: %d\n", summary.failures)
 }
 
 func run(ctx context.Context, cfg config, stdout, stderr io.Writer) error {
-	classifier, err := typemail.NewClassifier(cfg.openRouterKey)
+	classifier, err := typemail.NewClassifierWithConfig(cfg.openRouterKey, cfg.classifierConfig)
 	if err != nil {
 		return err
 	}
@@ -325,7 +340,7 @@ func run(ctx context.Context, cfg config, stdout, stderr io.Writer) error {
 	}()
 
 	summary := outputResults(stdout, stderr, results, cfg.debug)
-	writeSummary(stdout, summary)
+	writeSummary(stdout, summary, classifier.Classes())
 	if err := ctx.Err(); err != nil {
 		return err
 	}

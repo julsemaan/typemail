@@ -3,6 +3,7 @@ module typemail
 go 1.23
 
 require (
+	github.com/BurntSushi/toml v1.5.0
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/emersion/go-message v0.18.2
 )

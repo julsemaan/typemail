@@ -36,12 +36,43 @@ Diagnostics decode only the provider's `error.message` from responses up to 4 Ki
 ## Classification categories
 
 - `legitimate`: expected personal, business, or transactional correspondence
-- `marketing`: promotional mail or newsletters from an identifiable sender
+- `selling`: email that solicits or promotes a purchase of a consumer product
 - `spam`: unwanted bulk mail, generic solicitation, or low-quality junk
 - `phishing`: deceptive requests for credentials, money, sensitive data, or harmful actions
 - `suspicious`: concerning or ambiguous mail that does not clearly fit another category
 
-Each successful result includes the selected class, confidence, all five probabilities, and the concrete model identifier returned by OpenRouter.
+Each successful result includes the selected class, confidence, one probability per active class, and the concrete model identifier returned by OpenRouter.
+
+## Class configuration
+
+Load an optional TOML file explicitly. The CLI does not discover files automatically, and credentials and other flags are unchanged.
+
+```sh
+go run ./cmd/typemail -config typemail.toml
+```
+
+```toml
+# Replace a built-in's criteria.
+[classes.selling]
+criteria = """
+Emails promoting purchases.
+Exclude purchase confirmations and receipts.
+"""
+
+# Disable a built-in.
+[classes.suspicious]
+enabled = false
+
+# Add a custom class.
+[classes.receipts]
+criteria = "Purchase confirmations, invoices, and payment receipts."
+```
+
+All built-ins start enabled with their existing criteria. Unmentioned built-ins and empty built-in sections remain unchanged. `enabled` defaults to `true` for every class. Supplied criteria replace the entire string. Custom classes require nonblank criteria even when disabled.
+
+Names are exact and case-sensitive. Blank names, surrounding whitespace, and control characters are rejected. Explicitly blank criteria, unknown settings, malformed TOML, and configurations with no active classes are also rejected before connecting to IMAP. No file, an empty file, or an empty `classes` table preserves defaults.
+
+Requests and results use only active classes. Totals list every active class, including zero counts, and omit disabled classes.
 
 ## Read-only processing
 
@@ -58,6 +89,21 @@ message, err := typemail.ParseMessage(reader, 100<<10)
 classifier, err := typemail.NewClassifier(apiKey)
 result, err := classifier.Classify(ctx, message)
 ```
+
+To configure library classes, use optional pointers to distinguish omitted values from explicit overrides:
+
+```go
+criteria := "Purchase confirmations, invoices, and payment receipts."
+enabled := false
+classifier, err := typemail.NewClassifierWithConfig(apiKey, typemail.ClassifierConfig{
+    Classes: map[string]typemail.ClassConfig{
+        "receipts":   {Criteria: &criteria},
+        "suspicious": {Enabled: &enabled},
+    },
+})
+```
+
+`NewClassifier` preserves defaults. `NewClassifierWithConfig` validates and copies the configuration. `classifier.Classes()` returns a fresh, sorted slice of active names. Custom results use `typemail.Class` with the configured name.
 
 Library callers choose their own body limit through the `ParseMessage` argument; the CLI default does not apply.
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -26,7 +27,7 @@ func validResponse() map[string]any {
 					"legitimate": 0.01,
 					"spam":       0.01,
 					"phishing":   0.98,
-					"marketing":  0,
+					"selling":    0,
 					"suspicious": 0,
 				},
 			},
@@ -218,6 +219,121 @@ func TestClassifierCancellationStopsRetry(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Classify() did not stop after cancellation")
+	}
+}
+
+func TestClassifierConfiguration(t *testing.T) {
+	criteria := "Purchase receipts."
+	disabled := false
+	cfg := ClassifierConfig{Classes: map[string]ClassConfig{
+		"selling":    {Criteria: &criteria},
+		"suspicious": {Enabled: &disabled},
+		"Receipts":   {Criteria: &criteria},
+		"archived":   {Enabled: &disabled, Criteria: &criteria},
+	}}
+	classifier, err := NewClassifierWithConfig("key", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Class{"Receipts", "legitimate", "phishing", "selling", "spam"}
+	if !reflect.DeepEqual(classifier.Classes(), want) || classifier.criteria["selling"] != criteria {
+		t.Fatalf("classes = %v, criteria = %v", classifier.Classes(), classifier.criteria)
+	}
+	criteria = "changed"
+	disabled = true
+	delete(cfg.Classes, "Receipts")
+	names := classifier.Classes()
+	names[0] = "changed"
+	other, err := NewClassifier("key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(classifier.Classes(), want) || classifier.criteria["selling"] != "Purchase receipts." || other.criteria["selling"] != classCriteria["selling"] || len(other.Classes()) != 5 {
+		t.Fatal("classifiers share mutable configuration")
+	}
+	for _, cfg := range []ClassifierConfig{{}, {Classes: map[string]ClassConfig{}}, {Classes: map[string]ClassConfig{"selling": {}}}} {
+		c, err := NewClassifierWithConfig("key", cfg)
+		if err != nil || !reflect.DeepEqual(c.criteria, classCriteria) {
+			t.Fatalf("default criteria = %v, error = %v", c, err)
+		}
+	}
+}
+
+func TestClassifierRejectsInvalidConfiguration(t *testing.T) {
+	blank, criteria, disabled := " \n", "Receipts", false
+	for _, name := range []string{"", " ", " receipts", "receipts ", "a\nb", "a\u007fb"} {
+		if _, err := NewClassifierWithConfig("key", ClassifierConfig{Classes: map[string]ClassConfig{name: {Criteria: &criteria}}}); err == nil {
+			t.Errorf("accepted invalid name %q", name)
+		}
+	}
+	for _, config := range []ClassConfig{{}, {Enabled: &disabled}, {Criteria: &blank}, {Enabled: &disabled, Criteria: &blank}} {
+		if _, err := NewClassifierWithConfig("key", ClassifierConfig{Classes: map[string]ClassConfig{"receipts": config}}); err == nil {
+			t.Errorf("accepted invalid custom config %#v", config)
+		}
+	}
+	if _, err := NewClassifierWithConfig("key", ClassifierConfig{Classes: map[string]ClassConfig{"selling": {Criteria: &blank}}}); err == nil {
+		t.Fatal("accepted blank built-in criteria")
+	}
+	cfg := ClassifierConfig{Classes: map[string]ClassConfig{}}
+	for name := range classCriteria {
+		cfg.Classes[name] = ClassConfig{Enabled: &disabled}
+	}
+	if _, err := NewClassifierWithConfig("key", cfg); err == nil {
+		t.Fatal("accepted no active classes")
+	}
+	cfg.Classes["receipts"] = ClassConfig{Enabled: &disabled, Criteria: &criteria}
+	if _, err := NewClassifierWithConfig("key", cfg); err == nil {
+		t.Fatal("disabled custom class must not make configuration active")
+	}
+}
+
+func TestConfiguredClassifierRequestAndResponse(t *testing.T) {
+	criteria, disabled := "Purchase receipts.", false
+	cfg := ClassifierConfig{Classes: map[string]ClassConfig{
+		"receipts": {Criteria: &criteria}, "selling": {Criteria: &criteria}, "suspicious": {Enabled: &disabled},
+	}}
+	for _, mode := range []string{"valid", "disabled choice", "disabled probability", "missing probability"} {
+		t.Run(mode, func(t *testing.T) {
+			classifier, err := NewClassifierWithConfig("key", cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request classifyRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					return
+				}
+				if !reflect.DeepEqual(request.Questions[questionID].Criteria, classifier.criteria) || request.Questions[questionID].Criteria["receipts"] != criteria || request.Questions[questionID].Criteria["selling"] != criteria {
+					t.Errorf("criteria = %v", request.Questions[questionID].Criteria)
+				}
+				response := validResponse()
+				answer := response["answers"].(map[string]any)[questionID].(map[string]any)
+				answer["choice"] = "receipts"
+				probabilities := map[string]float64{"receipts": 1, "selling": 0, "spam": 0, "phishing": 0, "legitimate": 0}
+				answer["probabilities"] = probabilities
+				switch mode {
+				case "disabled choice":
+					answer["choice"] = "suspicious"
+				case "disabled probability":
+					delete(probabilities, "spam")
+					probabilities["suspicious"] = 0
+				case "missing probability":
+					delete(probabilities, "receipts")
+				}
+				writeJSON(t, w, response)
+			}))
+			defer server.Close()
+			classifier.endpoint, classifier.client = server.URL, server.Client()
+			result, err := classifier.Classify(context.Background(), Message{})
+			if mode == "valid" {
+				if err != nil || result.Class != "receipts" || result.Probabilities["receipts"] != 1 || len(result.Probabilities) != 5 {
+					t.Fatalf("result = %#v, error = %v", result, err)
+				}
+			} else if err == nil {
+				t.Fatal("accepted invalid response")
+			}
+		})
 	}
 }
 

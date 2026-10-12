@@ -5,6 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,6 +27,133 @@ func completeEnvironment() map[string]string {
 		"TYPEMAIL_IMAP_USERNAME": "user",
 		"TYPEMAIL_IMAP_PASSWORD": "password",
 		"OPENROUTER_API_KEY":     "key",
+	}
+}
+
+func defaultClasses(t *testing.T) []typemail.Class {
+	t.Helper()
+	classifier, err := typemail.NewClassifier("key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return classifier.Classes()
+}
+
+func TestLoadConfigClassifierFile(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{name: "empty"},
+		{name: "empty classes table", content: "[classes]"},
+		{name: "empty built-in section", content: "[classes.selling]"},
+		{name: "wrong enabled type", content: "[classes.spam]\nenabled = 'false'", wantErr: "decode config"},
+		{name: "wrong criteria type", content: "[classes.spam]\ncriteria = false", wantErr: "decode config"},
+		{name: "malformed", content: "[classes", wantErr: "decode config"},
+		{name: "unknown top-level key", content: "concurrency = 10", wantErr: "concurrency"},
+		{name: "uppercase classes", content: "[CLASSES.spam]\nenabled = false", wantErr: "CLASSES"},
+		{name: "uppercase enabled", content: "[classes.spam]\nEnabled = false", wantErr: "Enabled"},
+		{name: "uppercase criteria", content: "[classes.spam]\nCriteria = 'junk'", wantErr: "Criteria"},
+		{name: "unknown class key", content: "[classes.spam]\ncriterai = 'typo'", wantErr: "classes.spam.criterai"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(tc.content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := loadConfig([]string{"-config", path}, testEnvironment(completeEnvironment()))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("loadConfig() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			classifier, err := typemail.NewClassifierWithConfig("key", cfg.classifierConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(classifier.Classes(), defaultClasses(t)) {
+				t.Fatalf("empty config classes = %v, want defaults", classifier.Classes())
+			}
+		})
+	}
+}
+
+func TestLoadConfigMultilineCriteria(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "[classes.receipts]\nenabled = true\ncriteria = \"\"\"\nPurchase receipts.\nInclude invoices.\n\"\"\"\n[classes.spam]\nenabled = false\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig([]string{"-config", path}, testEnvironment(completeEnvironment()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipts := cfg.classifierConfig.Classes["receipts"]
+	if receipts.Enabled == nil || !*receipts.Enabled || receipts.Criteria == nil || *receipts.Criteria != "Purchase receipts.\nInclude invoices.\n" {
+		t.Fatalf("receipts config = %#v", receipts)
+	}
+	spam := cfg.classifierConfig.Classes["spam"]
+	if spam.Enabled == nil || *spam.Enabled || spam.Criteria != nil {
+		t.Fatalf("spam config = %#v", spam)
+	}
+}
+
+func TestLoadConfigMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.toml")
+	_, err := loadConfig([]string{"-config", path}, testEnvironment(completeEnvironment()))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("loadConfig() error = %v, want missing file", err)
+	}
+}
+
+func TestLoadConfigEmptyPathUsesDefaults(t *testing.T) {
+	for _, args := range [][]string{nil, {"-config", ""}} {
+		cfg, err := loadConfig(args, testEnvironment(completeEnvironment()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.classifierConfig.Classes) != 0 {
+			t.Fatalf("default classifier config = %#v", cfg.classifierConfig)
+		}
+	}
+}
+
+func TestRunRejectsInvalidClassifierConfigBeforeIMAP(t *testing.T) {
+	criteria := ""
+	cfg := config{
+		openRouterKey: "key",
+		imapAddr:      "invalid IMAP address",
+		classifierConfig: typemail.ClassifierConfig{Classes: map[string]typemail.ClassConfig{
+			"receipts": {Criteria: &criteria},
+		}},
+	}
+	_, wantErr := typemail.NewClassifierWithConfig(cfg.openRouterKey, cfg.classifierConfig)
+	if wantErr == nil {
+		t.Fatal("empty custom criteria should be invalid")
+	}
+	err := run(context.Background(), cfg, io.Discard, io.Discard)
+	if err == nil || err.Error() != wantErr.Error() {
+		t.Fatalf("run() error = %v, want classifier validation error %v", err, wantErr)
+	}
+}
+
+func TestWriteSummaryUsesActiveClasses(t *testing.T) {
+	active := []typemail.Class{"receipts", typemail.ClassSpam}
+	summary := runSummary{
+		counts:   map[typemail.Class]int{"receipts": 2, typemail.ClassLegitimate: 7},
+		total:    10,
+		failures: 1,
+	}
+	var output bytes.Buffer
+	writeSummary(&output, summary, active)
+	want := "\nTotals:\nMessages: 10\nreceipts: 2\nspam: 0\nFailures: 1\n"
+	if output.String() != want {
+		t.Fatalf("summary = %q, want %q", output.String(), want)
 	}
 }
 
@@ -103,7 +234,7 @@ func TestOutputHTTPDiagnostics(t *testing.T) {
 		close(input)
 		var stdout, stderr bytes.Buffer
 		summary := outputResults(&stdout, &stderr, input, debug)
-		writeSummary(&stdout, summary)
+		writeSummary(&stdout, summary, defaultClasses(t))
 		if summary.total != 4 || summary.failures != 3 || summary.counts[typemail.ClassSpam] != 1 || !strings.Contains(stdout.String(), "Failures: 3") || !strings.Contains(stdout.String(), "0.94") {
 			t.Fatalf("summary = %#v, stdout = %q", summary, stdout.String())
 		}
@@ -211,7 +342,7 @@ func TestWorkerErrorsReachFinalSummary(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	summary := outputResults(&stdout, &stderr, results, false)
-	writeSummary(&stdout, summary)
+	writeSummary(&stdout, summary, defaultClasses(t))
 	if summary.failures != 1 {
 		t.Fatalf("failures = %d, want 1", summary.failures)
 	}
