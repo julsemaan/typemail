@@ -1,10 +1,16 @@
 package typemail
 
 import (
+	"bufio"
 	"bytes"
 	"io"
+	"mime"
 	"strings"
 	"testing"
+
+	"github.com/emersion/go-message"
+	"github.com/emersion/go-message/mail"
+	"github.com/emersion/go-message/textproto"
 )
 
 type trackingReader struct {
@@ -118,6 +124,95 @@ func TestParseMessageCapsCombinedTextAndDrainsSource(t *testing.T) {
 func TestParseMessageRejectsMalformedMessage(t *testing.T) {
 	if _, err := ParseMessage(strings.NewReader("not a header\r\n\r\nbody"), 100); err == nil {
 		t.Fatal("ParseMessage() error = nil, want error")
+	}
+}
+
+func TestRewriteSubject(t *testing.T) {
+	for _, tc := range []struct {
+		name, headers, want string
+		class               Class
+	}{
+		{"plain", "Subject: Hello\r\n", "[spam] Hello", ClassSpam},
+		{"unicode", "Subject: =?UTF-8?B?SGVsbG8g4piD?=\r\n", "[spam] Hello ☃", ClassSpam},
+		{"folded", "Subject: Hello\r\n world\r\n", "[spam] Hello world", ClassSpam},
+		{"missing", "", "[spam]", ClassSpam},
+		{"custom", "Subject: Hello\r\n", "[équipe] Hello", Class("équipe")},
+		{"changed class", "Subject: [spam] Hello\r\nX-Typemail-Class: spam\r\n", "[phishing] Hello", ClassPhishing},
+		{"encoded marker class change", "Subject: " + mime.QEncoding.Encode("utf-8", "[équipe] Hello") + "\r\nX-Typemail-Class: " + mime.QEncoding.Encode("utf-8", "équipe") + "\r\n", "[spam] Hello", ClassSpam},
+		{"unmarked prefix", "Subject: [spam] Hello\r\n", "[spam] [spam] Hello", ClassSpam},
+		{"mismatched marker", "Subject: Hello\r\nX-Typemail-Class: spam\r\n", "[spam] Hello", ClassSpam},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := "--part\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\ncaf=C3=A9\r\n--part\r\nContent-Type: application/octet-stream\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=a.bin\r\n\r\nAAH/\r\n--part--\r\nepilogue\x00\xff"
+			raw := tc.headers + "X-Custom: untouched\r\n folded\r\nContent-Type: multipart/mixed; boundary=part\r\n\r\n" + body
+			var out bytes.Buffer
+			subject, changed, err := RewriteSubject(&out, strings.NewReader(raw), tc.class)
+			if err != nil || !changed || subject != tc.want {
+				t.Fatalf("RewriteSubject() = %q, %v, %v; want %q, true, nil", subject, changed, err, tc.want)
+			}
+			r := bufio.NewReader(bytes.NewReader(out.Bytes()))
+			h, err := textproto.ReadHeader(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			header := mail.Header{Header: message.Header{Header: h}}
+			if got, err := header.Subject(); err != nil || got != tc.want {
+				t.Fatalf("Subject = %q, %v", got, err)
+			}
+			if got, err := header.Text("X-Typemail-Class"); err != nil || got != string(tc.class) {
+				t.Fatalf("marker = %q, %v", got, err)
+			}
+			gotBody, err := io.ReadAll(r)
+			if err != nil || string(gotBody) != body {
+				t.Fatalf("body changed: %v", err)
+			}
+			if !strings.Contains(out.String(), "X-Custom: untouched\r\n folded\r\n") {
+				t.Fatal("unrelated header changed")
+			}
+			// A rerun must drain a body larger than the header reader's buffer.
+			rerun := &trackingReader{reader: bytes.NewReader(append(out.Bytes(), bytes.Repeat([]byte("x"), 10000)...))}
+			var unchanged bytes.Buffer
+			got, changed, err := RewriteSubject(&unchanged, rerun, tc.class)
+			if err != nil || changed || got != tc.want || !rerun.done {
+				t.Fatalf("rerun = %q, %v, %v, drained=%v", got, changed, err, rerun.done)
+			}
+			if unchanged.Len() != 0 {
+				t.Fatal("unchanged message was written")
+			}
+		})
+	}
+}
+
+func TestRewriteSubjectInvalidClasses(t *testing.T) {
+	for _, class := range []Class{"", " spam", "spam ", "spam\r\nInjected: yes", "spam\x00", "spam\x7f"} {
+		var out bytes.Buffer
+		if _, _, err := RewriteSubject(&out, strings.NewReader("Subject: Hello\r\n\r\nBody"), class); err == nil {
+			t.Fatalf("class %q accepted", class)
+		}
+		if out.Len() != 0 {
+			t.Fatal("invalid class wrote output")
+		}
+	}
+}
+
+func TestParseMessageStripsOnlyMarkedPrefix(t *testing.T) {
+	for _, tc := range []struct{ subject, marker, want string }{
+		{"[spam] Hello", "spam", "Hello"},
+		{"[équipe] Hello ☃", "équipe", "Hello ☃"},
+		{"[spam] Hello", "", "[spam] Hello"},
+		{"[spam] Hello", "phishing", "[spam] Hello"},
+	} {
+		raw := "Subject: " + mime.QEncoding.Encode("utf-8", tc.subject) + "\r\nX-Typemail-Class: " + mime.QEncoding.Encode("utf-8", tc.marker) + "\r\n\r\nBody"
+		msg, err := ParseMessage(strings.NewReader(raw), 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := msg.Headers["Subject"][0]; got != tc.want {
+			t.Fatalf("Subject = %q, want %q", got, tc.want)
+		}
+		if _, ok := msg.Headers["X-Typemail-Class"]; ok {
+			t.Fatal("marker included in classification")
+		}
 	}
 }
 

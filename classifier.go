@@ -115,8 +115,8 @@ func NewClassifierWithConfig(apiKey string, cfg ClassifierConfig) (*Classifier, 
 		criteria[name] = value
 	}
 	for name, config := range cfg.Classes {
-		if name == "" || strings.TrimSpace(name) != name || strings.ContainsFunc(name, unicode.IsControl) {
-			return nil, fmt.Errorf("invalid class name %q", name)
+		if err := validateClassName(name); err != nil {
+			return nil, err
 		}
 		_, builtin := classCriteria[name]
 		if config.Criteria == nil && !builtin {
@@ -153,6 +153,13 @@ func (c *Classifier) Classes() []Class {
 	}
 	sort.Slice(classes, func(i, j int) bool { return classes[i] < classes[j] })
 	return classes
+}
+
+func validateClassName(name string) error {
+	if name == "" || strings.TrimSpace(name) != name || strings.ContainsFunc(name, unicode.IsControl) {
+		return fmt.Errorf("invalid class name %q", name)
+	}
+	return nil
 }
 
 func refuseRedirects(*http.Request, []*http.Request) error {

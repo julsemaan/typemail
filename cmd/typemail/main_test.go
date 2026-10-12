@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/emersion/go-imap/v2"
 	"typemail"
 )
 
@@ -206,6 +207,42 @@ func TestLoadConfigRejectsInvalidMaxEmailBytes(t *testing.T) {
 				t.Fatal("loadConfig() error = nil, want error")
 			}
 		})
+	}
+}
+
+func TestLoadConfigRewriteSubjectIsOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		var args []string
+		if enabled {
+			args = []string{"-rewrite-subject"}
+		}
+		cfg, err := loadConfig(args, testEnvironment(completeEnvironment()))
+		if err != nil || cfg.rewriteSubject != enabled {
+			t.Fatalf("rewriteSubject = %v, error = %v", cfg.rewriteSubject, err)
+		}
+	}
+}
+
+func TestWorkersForwardAdmittedJobsAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	input := make(chan classificationJob, 3)
+	for uid := 1; uid <= 3; uid++ {
+		input <- classificationJob{uid: imap.UID(uid)}
+	}
+	close(input)
+	seen := make(map[imap.UID]bool)
+	for result := range startWorkers(ctx, 2, input, func(context.Context, typemail.Message) (typemail.Result, error) {
+		t.Error("classification called after cancellation")
+		return typemail.Result{}, nil
+	}) {
+		if seen[result.uid] || !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("unexpected result = %#v", result)
+		}
+		seen[result.uid] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("forwarded %d results, want 3", len(seen))
 	}
 }
 

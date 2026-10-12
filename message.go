@@ -1,13 +1,16 @@
 package typemail
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/emersion/go-message"
 	_ "github.com/emersion/go-message/charset"
 	"github.com/emersion/go-message/mail"
+	"github.com/emersion/go-message/textproto"
 )
 
 // Message is the bounded, attachment-free representation sent for classification.
@@ -33,6 +36,64 @@ var selectedHeaders = map[string]string{
 	"authentication-results": "Authentication-Results",
 }
 
+const classMarkerHeader = "X-Typemail-Class"
+
+func stripClassPrefix(subject, marker string) string {
+	if marker == "" {
+		return subject
+	}
+	if subject == "["+marker+"]" {
+		return ""
+	}
+	return strings.TrimPrefix(subject, "["+marker+"] ")
+}
+
+// RewriteSubject prefixes the decoded subject with class and records its marker.
+// The raw MIME body and unrelated headers are preserved. An unchanged message
+// is consumed without writing to w.
+func RewriteSubject(w io.Writer, r io.Reader, class Class) (subject string, changed bool, err error) {
+	if err := validateClassName(string(class)); err != nil {
+		return "", false, err
+	}
+	if w == nil || r == nil {
+		return "", false, fmt.Errorf("rewrite subject: nil writer or reader")
+	}
+	reader := bufio.NewReader(r)
+	rawHeader, err := textproto.ReadHeader(reader)
+	if err != nil {
+		return "", false, fmt.Errorf("read message header: %w", err)
+	}
+	header := mail.Header{Header: message.Header{Header: rawHeader}}
+	subject, err = header.Subject()
+	if err != nil {
+		return "", false, fmt.Errorf("decode subject: %w", err)
+	}
+	marker, err := header.Text(classMarkerHeader)
+	if err != nil {
+		return "", false, fmt.Errorf("decode class marker: %w", err)
+	}
+	label := "[" + string(class) + "]"
+	if marker == string(class) && (subject == label || strings.HasPrefix(subject, label+" ")) {
+		_, err := io.Copy(io.Discard, reader)
+		return subject, false, err
+	}
+	subject = stripClassPrefix(subject, marker)
+	if subject == "" {
+		subject = label
+	} else {
+		subject = label + " " + subject
+	}
+	header.SetSubject(subject)
+	header.SetText(classMarkerHeader, string(class))
+	if err := textproto.WriteHeader(w, header.Header.Header); err != nil {
+		return subject, false, fmt.Errorf("write message header: %w", err)
+	}
+	if _, err := io.Copy(w, reader); err != nil {
+		return subject, false, fmt.Errorf("copy message body: %w", err)
+	}
+	return subject, true, nil
+}
+
 // ParseMessage parses an RFC 822 message, excluding attachments and limiting
 // the combined decoded inline text to maxTextBytes.
 func ParseMessage(r io.Reader, maxTextBytes int64) (Message, error) {
@@ -48,6 +109,10 @@ func ParseMessage(r io.Reader, maxTextBytes int64) (Message, error) {
 		return Message{}, fmt.Errorf("parse message: %w", err)
 	}
 
+	marker, err := reader.Header.Text(classMarkerHeader)
+	if err != nil {
+		return Message{}, fmt.Errorf("decode class marker: %w", err)
+	}
 	result := Message{Headers: make(map[string][]string)}
 	fields := reader.Header.Fields()
 	for fields.Next() {
@@ -58,6 +123,9 @@ func ParseMessage(r io.Reader, maxTextBytes int64) (Message, error) {
 		value, err := fields.Text()
 		if err != nil {
 			return Message{}, fmt.Errorf("decode %s header: %w", key, err)
+		}
+		if key == "Subject" {
+			value = stripClassPrefix(value, marker)
 		}
 		result.Headers[key] = append(result.Headers[key], value)
 	}

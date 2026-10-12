@@ -1,6 +1,6 @@
 # typemail
 
-`typemail` classifies the messages in an IMAP `INBOX` with TypeSafe Jev through OpenRouter. It is a read-only scanner with a small Go library and CLI.
+`typemail` classifies the messages in an IMAP `INBOX` with TypeSafe Jev through OpenRouter. It is read-only by default, with opt-in subject tagging and a small Go library and CLI.
 
 ## Quick start
 
@@ -75,9 +75,31 @@ Names are exact and case-sensitive. Blank names, surrounding whitespace, and con
 
 Requests and results use only active classes. Totals list every active class, including zero counts, and omit disabled classes.
 
+## Subject tagging
+
+To tag every successfully classified email, including custom classes:
+
+```sh
+go run ./cmd/typemail -config typemail.toml -rewrite-subject
+```
+
+`Your awesome email` becomes `[legitimate] Your awesome email`. The scanner records the class in `X-Typemail-Class`. On reruns it removes only the prefix recorded by that marker, preserves unrelated bracketed text, and skips replacement when the tag already matches. Classification excludes the recorded prefix and never sends the marker to OpenRouter.
+
+Rewriting requires UIDPLUS or IMAP4rev2 and selects `INBOX` read-write. The scanner snapshots non-deleted UIDs once, so uploaded replacements do not enter the same scan. Classification remains concurrent; one mutex serializes complete IMAP fetch and replacement operations.
+
+IMAP messages are immutable. The scanner streams each rewritten email through a private temporary file, uploads a replacement preserving the raw MIME body, persistent flags and internal date, then deletes and UID-expunges only the original. It never uses mailbox-wide EXPUNGE. Successful output shows the replacement UID and tagged subject. Missing or newly deleted messages skip rewriting. Rewrite failures count as failures and cause a nonzero exit.
+
+Before using this on important mail, test with a disposable mailbox:
+
+- Replacement messages have new UIDs. Clients may display duplicates or stale cached subjects until they refresh.
+- Changing headers can invalidate DKIM signatures.
+- Flags reflect the last fetch and can race with another client. `\\Recent` and `\\Deleted` are not copied.
+- Interruptions or ambiguous APPEND outcomes can leave duplicates. The original remains untouched until the upload completes and the server confirms a replacement UID with matching UIDVALIDITY. There is no automatic APPEND retry or persistent recovery. If original cleanup fails, the error reports both UIDs; inspect them before retrying.
+- Do not run multiple rewrite scanners simultaneously.
+
 ## Read-only processing
 
-The CLI selects `INBOX` with IMAP `EXAMINE` and fetches messages with `BODY.PEEK[]`. It does not set flags, rewrite messages, move mail, or delete mail. IMAP fetching and MIME parsing are sequential. Only OpenRouter calls run concurrently.
+Without `-rewrite-subject`, the CLI selects `INBOX` with IMAP `EXAMINE` and fetches messages with `BODY.PEEK[]`. It does not set flags, rewrite messages, move mail, or delete mail. IMAP fetching and MIME parsing are sequential. Only OpenRouter calls run concurrently. Scans exclude messages already marked deleted.
 
 The parser decodes MIME headers, transfer encodings, and supported character sets. It keeps inline `text/plain` and `text/html` parts and ignores attachments. The CLI keeps the first 16,384 bytes of combined decoded body text in MIME order by default. Use `-max-email-bytes` to change this limit; values below one are rejected. The limit excludes headers and JSON overhead. The parser drains the source after reaching the cap so the IMAP connection can be reused.
 
@@ -113,8 +135,7 @@ The library uses `github.com/emersion/go-imap/v2` for IMAP integration and `gith
 ## Current exclusions
 
 - Postfix or Cyrus integration
-- Subject or header rewriting
-- Moving or deleting messages
+- Moving messages or deleting them outside subject replacement
 - Attachment inspection
 - OAuth authentication
 - Persistent checkpoints or incremental scans
@@ -129,5 +150,4 @@ go test -race ./...
 go vet ./...
 ```
 
-A real-mailbox check is still required to verify the IMAP server's read-only behavior and credentials.
-# typemail
+Local scripted IMAP tests cover read-only defaults, capabilities, targeted replacement and expunge, failure paths, cancellation, FETCH draining, and serialization. A disposable real-mailbox check is still required to verify server behavior, flag and date preservation, client refreshes, and unchanged attachments.

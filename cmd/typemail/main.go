@@ -36,6 +36,7 @@ type config struct {
 	concurrency      int
 	maxEmailBytes    int64
 	debug            bool
+	rewriteSubject   bool
 	classifierConfig typemail.ClassifierConfig
 }
 
@@ -49,6 +50,7 @@ func loadConfig(args []string, getenv func(string) string) (config, error) {
 	concurrency := flags.Int("concurrency", defaultConcurrency, "maximum concurrent classifications")
 	maxEmailBytes := flags.Int64("max-email-bytes", defaultMaxEmailBytes, "maximum combined decoded email body bytes")
 	debug := flags.Bool("debug", false, "print HTTP diagnostics that may include email content")
+	rewriteSubject := flags.Bool("rewrite-subject", false, "replace messages with class-tagged subjects")
 	configPath := flags.String("config", "", "path to classifier TOML configuration")
 	if err := flags.Parse(args); err != nil {
 		return config{}, fmt.Errorf("parse flags: %w", err)
@@ -99,6 +101,7 @@ func loadConfig(args []string, getenv func(string) string) (config, error) {
 		concurrency:      *concurrency,
 		maxEmailBytes:    *maxEmailBytes,
 		debug:            *debug,
+		rewriteSubject:   *rewriteSubject,
 		classifierConfig: classifierConfig,
 	}, nil
 }
@@ -112,6 +115,7 @@ type classificationJob struct {
 }
 
 type classificationResult struct {
+	skipped string
 	uid     imap.UID
 	from    string
 	subject string
@@ -128,36 +132,23 @@ func startWorkers(ctx context.Context, concurrency int, jobs <-chan classificati
 	for i := 0; i < concurrency; i++ {
 		go func() {
 			defer workers.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case job, ok := <-jobs:
-					if !ok {
-						return
-					}
-					if ctx.Err() != nil {
-						return
-					}
-
-					result := typemail.Result{}
-					err := job.err
-					if err == nil {
-						result, err = classify(ctx, job.message)
-					}
-					out := classificationResult{
-						uid:     job.uid,
-						from:    job.from,
-						subject: job.subject,
-						result:  result,
-						err:     err,
-					}
-					select {
-					case results <- out:
-					case <-ctx.Done():
-						return
-					}
+			for job := range jobs {
+				result := typemail.Result{}
+				err := job.err
+				if err == nil {
+					err = ctx.Err()
 				}
+				if err == nil {
+					result, err = classify(ctx, job.message)
+				}
+				out := classificationResult{
+					uid:     job.uid,
+					from:    job.from,
+					subject: job.subject,
+					result:  result,
+					err:     err,
+				}
+				results <- out
 			}
 		}()
 	}
@@ -259,12 +250,15 @@ func outputResults(stdout, stderr io.Writer, results <-chan classificationResult
 			}
 			continue
 		}
+		if result.skipped != "" {
+			_, _ = fmt.Fprintf(stderr, "UID %d: skipped rewrite: %s\n", result.uid, result.skipped)
+		}
 		summary.counts[result.result.Class]++
 		_, _ = fmt.Fprintf(writer, "%d\t%s\t%s\t%s\t%.2f\n",
 			result.uid,
 			sanitizeField(result.from),
 			sanitizeField(result.subject),
-			result.result.Class,
+			sanitizeField(string(result.result.Class)),
 			result.result.Confidence,
 		)
 	}
@@ -308,23 +302,26 @@ func run(ctx context.Context, cfg config, stdout, stderr io.Writer) error {
 	if err := client.Login(cfg.imapUsername, cfg.imapPassword).Wait(); err != nil {
 		return fmt.Errorf("authenticate with IMAP: %w", err)
 	}
-	if _, err := client.Select("INBOX", &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
-		return fmt.Errorf("select INBOX: %w", err)
-	}
-	search, err := client.UIDSearch(&imap.SearchCriteria{}, nil).Wait()
+	uids, uidValidity, err := prepareMailbox(client, cfg.rewriteSubject)
 	if err != nil {
-		return fmt.Errorf("search INBOX: %w", err)
+		return err
 	}
 
+	var imapMutex sync.Mutex
 	jobs := make(chan classificationJob)
 	results := startWorkers(ctx, cfg.concurrency, jobs, classifier.Classify)
+	if cfg.rewriteSubject {
+		results = rewriteResults(ctx, client, uidValidity, &imapMutex, results)
+	}
 	go func() {
 		defer close(jobs)
-		for _, uid := range search.AllUIDs() {
+		for _, uid := range uids {
 			if ctx.Err() != nil {
 				return
 			}
+			imapMutex.Lock()
 			message, err := fetchMessage(ctx, client, uid, cfg.maxEmailBytes)
+			imapMutex.Unlock()
 			job := classificationJob{uid: uid, err: err}
 			if err == nil {
 				job.message = message
