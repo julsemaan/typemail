@@ -180,6 +180,20 @@ The unit uses directives available in CentOS 7's systemd 219 and runs as an unpr
 
 Startup reads `/usr/sbin/postconf -xh mynetworks` from the local Postfix configuration. Literal IPv4/IPv6 CIDRs and individual addresses are supported, including bracketed IPv6. Lookup tables or other nonliteral entries, an empty network list, invalid classifier settings, and a missing API key stop startup visibly. There is no second trusted-network list. Restart typemail whenever `mynetworks`, its configuration, or credentials change. Postfix must use the same local configuration read by `postconf`.
 
+### Readiness and watchdog
+
+The unit uses `Type=notify`. `systemctl start` completes only after configuration validation, Postfix network discovery, listener creation, and a successful local protocol-2 negotiation. Startup failure or cancellation never reports readiness. `TimeoutStartSec=30s` bounds startup. Inspect fixed, credential-free status messages with:
+
+```sh
+systemctl status typemail-milter
+systemctl show typemail-milter -p ActiveState -p SubState -p StatusText -p MainPID -p Result
+journalctl -u typemail-milter
+```
+
+`WatchdogSec=30s` checks responsiveness, not provider availability. Every ten seconds the daemon negotiates against its own listener with a one-second total deadline. It sends a heartbeat only after a valid response. Failed checks publish unhealthy status and withhold heartbeats, but continue probing so temporary failures can recover. Probes send no mail, consume no classification slots, and never call OpenRouter. Provider outages and saturation still pass mail unchanged and do not fail the watchdog.
+
+Crashes and watchdog expiry trigger `Restart=on-failure` after five seconds. Manual stops do not restart the service. Graceful shutdown stops probes, reports `STOPPING=1`, closes the listener, and waits for the serving loop. Without `NOTIFY_SOCKET`, systemd integration is disabled and standalone behavior remains unchanged. With a notification socket, invalid watchdog durations or PIDs fail startup; `WATCHDOG_PID` must match the daemon for heartbeats to be enabled. Notification writes are bounded; readiness or heartbeat delivery failure exits nonzero, while informational status delivery is best-effort. No new CLI flags or configuration settings are needed.
+
 ### RPM upgrades, downgrade, and removal
 
 The installed configuration is now `/etc/typemail/typemail.toml`, replacing `/etc/typemail/classes.toml`. RPM does not migrate edits across renamed paths. Before upgrading from a package using the old name, copy the existing file as root, preserving its `root:typemail` ownership and `0640` mode:
@@ -244,14 +258,16 @@ On disposable CentOS 7 staging with Postfix 2.10.1, run `postfix check` and test
 
 - Untrusted unauthenticated port-25 mail receives one tag, including custom classes, encoded subjects, and messages without a subject.
 - Trusted, authenticated, submission, SMTPS, and local messages remain untouched by typemail.
-- Stop, kill, and freeze the daemon. Confirm delivery without classifier-related rejection or retry. For a freeze test, send SIGSTOP and restore with SIGCONT afterward.
+- Test missing credentials, invalid configuration or `mynetworks`, and an occupied listener port. Confirm failed starts never reach `active/running` or publish readiness. Restore each fault before the next test.
+- Record `MainPID`, send SIGKILL, and confirm a new PID starts after the five-second restart delay. Repeat with SIGSTOP and wait past the 30-second watchdog window plus restart delay. Confirm watchdog failure in the journal and a new ready PID. Do not resume the obsolete PID after restart.
+- Run `systemctl stop typemail-milter` and wait beyond the restart delay. Confirm it remains stopped, then start it again. During stop, crash, and freeze tests, confirm delivery without classifier-related rejection or retry.
 - Simulate provider outages and hangs. Confirm unchanged delivery when slots fill or the four-second deadline expires.
 - Compare delivered MIME bodies and attachments with the originals. If your installation reinjects mail, verify that reinjection never adds another typemail tag and does not route mail through typemail again.
 - Check DKIM verification, authentication results, and restrictions. If existing filters or signing are configured, confirm their expected behavior under the shared protocol, failure-action, and timeout overrides.
 
 Rollback by restoring the previous port-25 overrides from the backup, then running `postfix check` and `postfix reload`. Leave global settings and all other services unchanged. After reload, stop and disable `typemail-milter`. Already delivered tags are not removed by rollback.
 
-Runtime validation on disposable CentOS 7 staging remains unverified. Documentation syntax review alone does not establish delivery, bypass, fail-open, or existing-filter compatibility.
+Runtime validation on disposable CentOS 7 staging remains unverified. Local tests cannot establish real systemd readiness, watchdog restart, manual-stop behavior, delivery, bypass, fail-open, or existing-filter compatibility.
 
 ## Current exclusions
 

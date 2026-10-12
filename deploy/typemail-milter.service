@@ -4,7 +4,10 @@ After=network-online.target postfix.service
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=30s
+WatchdogSec=30s
 User=typemail
 Group=typemail
 EnvironmentFile=/etc/typemail/milter.env
