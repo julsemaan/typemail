@@ -192,45 +192,43 @@ Before removal, follow the Postfix rollback guidance below so the port-25 servic
 
 ### Postfix configuration
 
-Back up `/etc/postfix/main.cf` and `/etc/postfix/master.cf`, including any existing port-25 timeout overrides. Identify the existing filter on port 8891 and its signing or verification role before deploying. Verify that Postfix sends `{auth_type}` and `{auth_authen}` at MAIL FROM under protocol 2, using `postconf milter_mail_macros` and an authenticated staging SMTP test. Preserve any existing macro settings; do not deploy without a working authentication bypass.
+These instructions target CentOS 7 and Postfix 2.10.1 and assume Postfix already receives external mail. Configuring a fresh mail server may require `main.cf` changes; integrating typemail into an already working server does not.
 
-Keep these existing `main.cf` values unchanged:
+Back up `/etc/postfix/main.cf` and `/etc/postfix/master.cf`, including all existing port-25 overrides. Verify that Postfix sends `{auth_type}` and `{auth_authen}` at MAIL FROM under protocol 2, using `postconf milter_mail_macros` and an authenticated staging SMTP test. Preserve any existing macro settings; do not deploy without a working authentication bypass.
 
-```text
-smtpd_milters = inet:127.0.0.1:8891
-non_smtpd_milters = $smtpd_milters
-milter_default_action = accept
-milter_protocol = 2
-```
-
-Retain the existing `smtp inet` line and its `-o content_filter=spamassassin` in `master.cf`. Add or replace only these overrides on that service, without duplicate options:
+Under the existing port-25 `smtp inet` service in `/etc/postfix/master.cf`, add or replace only these indented overrides. Preserve the service line and unrelated overrides, and replace duplicate options rather than adding another copy:
 
 ```text
-  -o smtpd_milters=inet:127.0.0.1:8891,inet:127.0.0.1:8892
+  -o smtpd_milters=inet:127.0.0.1:8892
+  -o milter_protocol=2
   -o milter_default_action=accept
   -o milter_connect_timeout=1s
   -o milter_command_timeout=5s
   -o milter_content_timeout=5s
 ```
 
-Do not change submission, SMTPS, `smtpsemaan`, or non-SMTP filtering. SpamAssassin's `sendmail` reinjection uses the unchanged `non_smtpd_milters`, so it does not invoke typemail again. Preserve all restrictions and security filters. Check the configuration with `postfix check`, then `postfix reload`.
+The example assumes no existing Milters on that service. The `smtpd_milters` override replaces the inherited list, rather than appending to it. If the service already uses Milters through `main.cf` or a service override, retain their endpoints in a comma-separated list with `inet:127.0.0.1:8892` and review their order and signing or verification roles. Postfix applies Milters in the listed order. Do not blindly replace an existing chain with the example.
 
-The five-second command/content timeouts also apply to the existing inbound Milter at 8891. These bound individual Milter stages, not the entire SMTP transaction. `accept` is a fallback for unavailable or failed filters, not an override of existing security-policy rejections. Subject changes can invalidate DKIM signatures during later verification, or signatures created by the earlier Milter. Understand the complete signing and authentication pipeline before enabling this.
+Leave global `smtpd_milters`, `non_smtpd_milters`, submission, SMTPS, and all other services unchanged. Preserve all restrictions, security filters, and any existing content-filter configuration; SpamAssassin is not required. Check the configuration with `postfix check`, then `postfix reload`.
 
-Protocol and macro references: [Postfix Milter support](https://www.postfix.org/MILTER_README.html), [Postfix parameters](https://www.postfix.org/postconf.5.html#milter_protocol), and the pinned [go-milter v0.4.1 implementation](https://github.com/emersion/go-milter/tree/v0.4.1). The library implements protocol 2; continuation responses preserve connection identity between transactions.
+The protocol, failure-action, and timeout overrides affect every Milter attached to the port-25 service, not just typemail. Confirm that each existing Milter supports protocol 2 and the proposed fail-open policy and timeouts before enabling this. The timeouts bound individual Milter stages, not the entire SMTP transaction. `accept` is a fallback for unavailable or failed filters, not an override of existing security-policy rejections. Subject changes can invalidate DKIM signatures during later verification, or signatures created by an earlier Milter. Understand the complete signing and authentication pipeline before enabling this.
+
+Protocol and macro references: Postfix 2.10.1's [master.cf syntax](https://github.com/vdukhovni/postfix/blob/v2.10.1/postfix/man/man5/master.5), [Milter support](https://github.com/vdukhovni/postfix/blob/v2.10.1/postfix/README_FILES/MILTER_README), [parameter definitions](https://github.com/vdukhovni/postfix/blob/v2.10.1/postfix/proto/postconf.proto), and the pinned [go-milter v0.4.1 implementation](https://github.com/emersion/go-milter/tree/v0.4.1). The library implements protocol 2; continuation responses preserve connection identity between transactions.
 
 ### Staging and rollback
 
-On staging Postfix 2.10.1, check the complete SpamAssassin pipeline before production:
+On disposable CentOS 7 staging with Postfix 2.10.1, run `postfix check` and test both a setup with no existing Milters and an existing-filter chain before production:
 
 - Untrusted unauthenticated port-25 mail receives one tag, including custom classes, encoded subjects, and messages without a subject.
 - Trusted, authenticated, submission, SMTPS, and local messages remain untouched by typemail.
 - Stop, kill, and freeze the daemon. Confirm delivery without classifier-related rejection or retry. For a freeze test, send SIGSTOP and restore with SIGCONT afterward.
 - Simulate provider outages and hangs. Confirm unchanged delivery when slots fill or the four-second deadline expires.
-- Compare delivered MIME bodies and attachments with the originals. Verify that reinjection never adds another typemail tag.
-- Check existing signing, DKIM verification, authentication results, restrictions, and the filter at 8891 for expected behavior under the shared timeouts.
+- Compare delivered MIME bodies and attachments with the originals. If your installation reinjects mail, verify that reinjection never adds another typemail tag and does not route mail through typemail again.
+- Check DKIM verification, authentication results, and restrictions. If existing filters or signing are configured, confirm their expected behavior under the shared protocol, failure-action, and timeout overrides.
 
-Rollback by restoring the previous port-25 Milter overrides and timeout values from the backup, then running `postfix check` and `postfix reload`. Leave the original 8891 and non-SMTP configuration intact. After reload, stop and disable `typemail-milter`. Already delivered tags are not removed by rollback.
+Rollback by restoring the previous port-25 overrides from the backup, then running `postfix check` and `postfix reload`. Leave global settings and all other services unchanged. After reload, stop and disable `typemail-milter`. Already delivered tags are not removed by rollback.
+
+Runtime validation on disposable CentOS 7 staging remains unverified. Documentation syntax review alone does not establish delivery, bypass, fail-open, or existing-filter compatibility.
 
 ## Current exclusions
 
@@ -256,6 +254,6 @@ RPM inspection checks metadata, dependencies, the exact file list, ownership, mo
 
 CentOS 7 package compatibility is accepted only after testing on a disposable CentOS 7 system with real systemd and Postfix. Test fresh RPM installation, upgrade, downgrade, and final removal. Edit both configuration files first and confirm preservation, `.rpmnew` or `.rpmsave` handling, root-only credential permissions, and retention of the service account. Check that installation leaves the service disabled and stopped, upgrades and downgrades preserve its prior running and enablement state, and removal stops and disables it. Confirm startup uses `/usr/bin/typemail-milter`, compare Postfix configuration against a pre-install backup, and run the fail-open staging checks above. Local inspection alone does not establish CentOS 7 compatibility.
 
-Protocol-2 wire tests cover header tagging, bypasses, repeated transactions and aborts, MIME limits, failures, retries, cancellation, and saturation. They cannot verify the real Postfix/SpamAssassin pipeline; the staging checks above remain required.
+Protocol-2 wire tests cover header tagging, bypasses, repeated transactions and aborts, MIME limits, failures, retries, cancellation, and saturation. They cannot verify the real Postfix pipeline or any existing filters; the staging checks above remain required.
 
 Local scripted IMAP tests cover read-only defaults, capabilities, targeted replacement and expunge, failure paths, cancellation, FETCH draining, and serialization. A disposable real-mailbox check is still required to verify server behavior, flag and date preservation, client refreshes, and unchanged attachments.
