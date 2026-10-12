@@ -142,31 +142,53 @@ Headers and body share a 1 MiB buffer limit. Oversized messages and duplicate Su
 
 ### Install on CentOS 7
 
-Build a static Linux amd64 binary on a supported build host with Go 1.23 or newer, not on CentOS 7:
+Build locally on a supported Linux host with Go 1.23 or newer, Bash, and `rpmbuild`, not on CentOS 7. Install your distribution's RPM build tools, for example `rpm-build` on Fedora or `rpm` on Debian. Inspection also needs `rpm`, `rpm2cpio`, `cpio`, and `readelf` from binutils.
 
 ```sh
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o typemail-milter ./cmd/typemail-milter
+./deploy/build-rpm.sh 0.1.0
+./deploy/check-rpm.sh dist/typemail-milter-0.1.0-1.el7.x86_64.rpm 0.1.0 1
+scp dist/typemail-milter-0.1.0-1.el7.x86_64.rpm root@mail.example.com:/tmp/
 ```
 
-Copy that binary and `deploy/typemail-milter.service` to the server. As root:
+An optional numeric release defaults to `1`, for example `./deploy/build-rpm.sh 0.1.0 2`. The build targets static Linux amd64 with `GOAMD64=v1` and creates an RPM v4 package with gzip compression. Only the binary, service unit, and public class template enter the package. Local `typemail.toml` and credentials are never copied.
+
+On the CentOS 7 server, as root:
 
 ```sh
-useradd --system --no-create-home --shell /sbin/nologin typemail
-install -m 0755 typemail-milter /usr/local/bin/typemail-milter
-install -d -o root -g typemail -m 0750 /etc/typemail
-install -o root -g typemail -m 0640 typemail.toml /etc/typemail/classes.toml
-install -o root -g root -m 0600 /dev/null /etc/typemail/milter.env
-# Edit milter.env to contain OPENROUTER_API_KEY=your-key. Do not put it in shell history.
-install -m 0644 deploy/typemail-milter.service /etc/systemd/system/typemail-milter.service
-systemctl daemon-reload
+yum localinstall /tmp/typemail-milter-0.1.0-1.el7.x86_64.rpm
+# Edit /etc/typemail/milter.env to contain OPENROUTER_API_KEY=your-key.
+# Use an editor, not shell history. The file starts empty and is root-only.
+# Optionally edit /etc/typemail/classes.toml to customize classes.
 systemctl enable typemail-milter
 systemctl start typemail-milter
 journalctl -u typemail-milter
 ```
 
+The RPM installs `/usr/bin/typemail-milter` and `/usr/lib/systemd/system/typemail-milter.service`, creates the system account and group if absent, and depends on Postfix, systemd, shadow-utils, and CA certificates. `/etc/typemail` is `root:typemail` with mode `0750`; `classes.toml` is `root:typemail` with mode `0640`; `milter.env` is `root:root` with mode `0600`. Installation reloads systemd but never enables or starts the service and never changes Postfix configuration.
+
 The unit uses directives available in CentOS 7's systemd 219 and runs as an unprivileged account. systemd reads the root-only environment file before dropping privileges. The class file uses the same strict TOML settings as the scanner. No IMAP credentials or debug flag are needed.
 
 Startup reads `/usr/sbin/postconf -xh mynetworks` from the local Postfix configuration. Literal IPv4/IPv6 CIDRs and individual addresses are supported, including bracketed IPv6. Lookup tables or other nonliteral entries, an empty network list, invalid classifier settings, and a missing API key stop startup visibly. There is no second trusted-network list. Restart typemail whenever `mynetworks`, its class configuration, or credentials change. Postfix must use the same local configuration read by `postconf`.
+
+### RPM upgrades, downgrade, and removal
+
+Transfer the new RPM, then upgrade as root:
+
+```sh
+yum localinstall /tmp/typemail-milter-0.1.1-1.el7.x86_64.rpm
+systemctl restart typemail-milter
+```
+
+RPM upgrades preserve enablement and running state. They do not restart the daemon; explicitly restart a running service to activate the new binary. Both configuration files use `%config(noreplace)`, so local edits survive upgrades and downgrades. Review any `.rpmnew` files before merging template changes.
+
+To downgrade, retain or rebuild the older RPM, transfer it, and run:
+
+```sh
+yum downgrade /tmp/typemail-milter-0.1.0-1.el7.x86_64.rpm
+systemctl restart typemail-milter
+```
+
+Before removal, follow the Postfix rollback guidance below so the port-25 service no longer references typemail. Then run `yum remove typemail-milter`. Final removal stops and disables the service and reloads systemd. The account remains; RPM saves modified configuration as `.rpmsave` files. These may contain credentials, so keep them root-only or remove them securely when no longer needed.
 
 ### Postfix configuration
 
@@ -226,8 +248,13 @@ Rollback by restoring the previous port-25 Milter overrides and timeout values f
 gofmt -w .
 go test -race ./...
 go vet ./...
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./cmd/typemail-milter
+./deploy/build-rpm.sh 0.1.0
+./deploy/check-rpm.sh dist/typemail-milter-0.1.0-1.el7.x86_64.rpm 0.1.0 1
 ```
+
+RPM inspection checks metadata, dependencies, the exact file list, ownership, modes, configuration flags, gzip payload, and static binary linkage. It compares the packaged templates with the public sources and checks that the environment file is empty.
+
+CentOS 7 package compatibility is accepted only after testing on a disposable CentOS 7 system with real systemd and Postfix. Test fresh RPM installation, upgrade, downgrade, and final removal. Edit both configuration files first and confirm preservation, `.rpmnew` or `.rpmsave` handling, root-only credential permissions, and retention of the service account. Check that installation leaves the service disabled and stopped, upgrades and downgrades preserve its prior running and enablement state, and removal stops and disables it. Confirm startup uses `/usr/bin/typemail-milter`, compare Postfix configuration against a pre-install backup, and run the fail-open staging checks above. Local inspection alone does not establish CentOS 7 compatibility.
 
 Protocol-2 wire tests cover header tagging, bypasses, repeated transactions and aborts, MIME limits, failures, retries, cancellation, and saturation. They cannot verify the real Postfix/SpamAssassin pipeline; the staging checks above remain required.
 
