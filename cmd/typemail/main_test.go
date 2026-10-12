@@ -152,7 +152,7 @@ func TestWriteSummaryUsesActiveClasses(t *testing.T) {
 	}
 	var output bytes.Buffer
 	writeSummary(&output, summary, active)
-	want := "\nTotals:\nMessages: 10\nreceipts: 2\nspam: 0\nFailures: 1\n"
+	want := "\nTotals:\nMessages: 10\nreceipts: 2\nspam: 0\nSkipped: 0\nFailures: 1\n"
 	if output.String() != want {
 		t.Fatalf("summary = %q, want %q", output.String(), want)
 	}
@@ -388,6 +388,45 @@ func TestWorkerErrorsReachFinalSummary(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "UID 42") || !strings.Contains(stderr.String(), "malformed message") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestWorkerClassificationSkipsReachOutput(t *testing.T) {
+	jobs := make(chan classificationJob, 1)
+	jobs <- classificationJob{uid: 42, from: "sender", subject: "skip me"}
+	close(jobs)
+	results := startWorkers(context.Background(), 1, jobs, func(context.Context, typemail.Message) (typemail.Result, error) {
+		return typemail.Result{Skipped: true}, nil
+	})
+	var stdout, stderr bytes.Buffer
+	summary := outputResults(&stdout, &stderr, results, false)
+	writeSummary(&stdout, summary, defaultClasses(t))
+	if summary.total != 1 || summary.skipped != 1 || summary.failures != 0 || len(summary.counts) != 0 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	lines := strings.Split(stdout.String(), "\n")
+	if got := strings.Fields(lines[1]); !reflect.DeepEqual(got, []string{"42", "sender", "skip", "me", "skipped", "-"}) {
+		t.Fatalf("skipped row = %q", lines[1])
+	}
+	if !strings.Contains(stdout.String(), "Skipped: 1\nFailures: 0") || stderr.Len() != 0 {
+		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestOutputSeparatesClassificationAndRewriteSkips(t *testing.T) {
+	input := make(chan classificationResult, 4)
+	input <- classificationResult{uid: 1, result: typemail.Result{Skipped: true, Class: typemail.ClassSpam, Confidence: 0.99}}
+	input <- classificationResult{uid: 2, skipped: "message disappeared", result: typemail.Result{Class: typemail.ClassSpam}}
+	input <- classificationResult{uid: 3, result: typemail.Result{Class: typemail.ClassLegitimate}}
+	input <- classificationResult{uid: 4, err: errors.New("classification failed")}
+	close(input)
+	var stdout, stderr bytes.Buffer
+	summary := outputResults(&stdout, &stderr, input, false)
+	if summary.total != 4 || summary.skipped != 1 || summary.failures != 1 || !reflect.DeepEqual(summary.counts, map[typemail.Class]int{typemail.ClassSpam: 1, typemail.ClassLegitimate: 1}) {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if strings.Contains(stdout.String(), "0.99") || !strings.Contains(stderr.String(), "UID 2: skipped rewrite: message disappeared") {
+		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
 	}
 }
 

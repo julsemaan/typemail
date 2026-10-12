@@ -41,8 +41,8 @@ func TestLoadClassifier(t *testing.T) {
 	if _, err := loadClassifier(nil, func(string) string { return "" }); err == nil {
 		t.Fatal("accepted missing API key")
 	}
-	path := filepath.Join(t.TempDir(), "classes.toml")
-	if err := os.WriteFile(path, []byte("[classes.receipts]\ncriteria = 'Invoices'"), 0600); err != nil {
+	path := filepath.Join(t.TempDir(), "typemail.toml")
+	if err := os.WriteFile(path, []byte("skip_sender_domains = ['semaan.ca']\n[classes.receipts]\ncriteria = 'Invoices'"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	c, err := loadClassifier([]string{"-config", path}, env)

@@ -1,7 +1,12 @@
 # Copy to typemail.toml and load with:
 # go run ./cmd/typemail -config typemail.toml
-# All sections are commented out, so this file preserves the built-in defaults.
-# Uncomment a section and its settings to apply it.
+# All settings are commented out, so this file preserves the built-in defaults.
+# Uncomment a setting or section to apply it.
+
+# Skip classification and tagging for From domains, including subdomains.
+# From is spoofable; this is not an authentication or security check.
+# Keep this top-level setting before any [classes.*] sections.
+# skip_sender_domains = ["semaan.ca"]
 
 # Replace the selling class's criteria entirely.
 # [classes.selling]

@@ -248,6 +248,30 @@ func TestWireClassification(t *testing.T) {
 	}
 }
 
+func TestWireClassificationSkipThenNormalTransaction(t *testing.T) {
+	var calls atomic.Int32
+	c := dialWire(t, startWireServer(t, context.Background(), func(_ context.Context, message typemail.Message) (typemail.Result, error) {
+		call := calls.Add(1)
+		if call == 1 {
+			return typemail.Result{Skipped: true, Class: typemail.ClassSpam}, nil
+		}
+		if !reflect.DeepEqual(message.Headers["Subject"], []string{"Fresh"}) || !reflect.DeepEqual(message.TextParts, []typemail.TextPart{{ContentType: "text/plain", Text: "Fresh body"}}) {
+			t.Errorf("stale skipped transaction: %#v", message)
+		}
+		return typemail.Result{Class: typemail.ClassLegitimate}, nil
+	}, nil))
+	c.connect('4', "203.0.113.5")
+	c.message([][2]string{{"Subject", "[newsletter] Keep"}, {markerHeader, "newsletter"}}, "Skipped body")
+	if updates := c.finish(); len(updates) != 0 {
+		t.Fatalf("skipped classification modified headers: %#v", updates)
+	}
+	c.message([][2]string{{"Subject", "Fresh"}}, "Fresh body")
+	checkUpdates(t, c.finish(), "[legitimate] Fresh", "legitimate", 'm', 'h')
+	if calls.Load() != 2 {
+		t.Fatalf("classifications = %d, want 2", calls.Load())
+	}
+}
+
 func TestWireMultipartTextLimit(t *testing.T) {
 	plain := strings.Repeat("p", 10<<10)
 	html := strings.Repeat("h", 10<<10)

@@ -194,6 +194,9 @@ func (f *filter) finish(w headerWriter) {
 		f.skip("classification failed or timed out")
 		return
 	}
+	if result.Skipped {
+		return
+	}
 	// Render everything before the first modification. The MIME body is never rewritten.
 	var rewritten bytes.Buffer
 	_, changed, err := typemail.RewriteSubject(&rewritten, bytes.NewReader(f.raw.Bytes()[:f.headerEnd]), result.Class)

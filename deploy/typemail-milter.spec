@@ -32,7 +32,7 @@ local Milter without changing Postfix configuration.
 install -D -m 0755 %{SOURCE0} %{buildroot}/usr/bin/typemail-milter
 install -D -m 0644 %{SOURCE1} %{buildroot}/usr/lib/systemd/system/typemail-milter.service
 install -d -m 0750 %{buildroot}/etc/typemail
-install -m 0640 %{SOURCE2} %{buildroot}/etc/typemail/classes.toml
+install -m 0640 %{SOURCE2} %{buildroot}/etc/typemail/typemail.toml
 install -m 0600 /dev/null %{buildroot}/etc/typemail/milter.env
 
 %pre
@@ -56,5 +56,5 @@ fi
 %attr(0755,root,root) /usr/bin/typemail-milter
 %attr(0644,root,root) /usr/lib/systemd/system/typemail-milter.service
 %dir %attr(0750,root,typemail) /etc/typemail
-%config(noreplace) %attr(0640,root,typemail) /etc/typemail/classes.toml
+%config(noreplace) %attr(0640,root,typemail) /etc/typemail/typemail.toml
 %config(noreplace) %attr(0600,root,root) /etc/typemail/milter.env

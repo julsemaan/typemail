@@ -36,7 +36,7 @@ func prepareMailbox(client *imapclient.Client, rewrite bool) ([]imap.UID, uint32
 
 // rewriteMessage is called with the scan's IMAP mutex held throughout.
 func rewriteMessage(ctx context.Context, client *imapclient.Client, uidValidity uint32, result classificationResult) classificationResult {
-	if result.err != nil {
+	if result.err != nil || result.result.Skipped {
 		return result
 	}
 	fail := func(err error) classificationResult { result.err = err; return result }

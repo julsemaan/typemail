@@ -203,6 +203,19 @@ func (w *rewriteWire) append(status string, beforeReply ...func()) {
 	}
 }
 
+func TestRewriteMessageClassificationSkipDoesNotTouchFilesOrIMAP(t *testing.T) {
+	// An unusable temporary directory makes even an attempted file creation fail.
+	t.Setenv("TMPDIR", t.TempDir()+"/missing")
+	client := scriptedRewriteClient(t, "IMAP4rev1 UIDPLUS", func(*rewriteWire) {})
+	input := rewriteInput()
+	input.result.Skipped = true
+	result := rewriteMessage(context.Background(), client, 9, input)
+	if !reflect.DeepEqual(result, input) {
+		t.Fatalf("skipped result = %+v, want unchanged %+v", result, input)
+	}
+	rewriteBarrier(t, client)
+}
+
 func TestRewriteMessageReplacementProtocol(t *testing.T) {
 	for _, tc := range []struct {
 		name, appendStatus, storeStatus, expungeStatus, wantErr string

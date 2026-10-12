@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/mail"
 	"sort"
 	"strings"
 	"time"
@@ -34,7 +35,9 @@ const (
 )
 
 // Result is the classification and probability distribution returned by Jev.
+// When Skipped is true, no request was made and all other fields are empty.
 type Result struct {
+	Skipped       bool
 	Class         Class
 	Confidence    float64
 	Probabilities map[Class]float64
@@ -63,19 +66,21 @@ type ClassConfig struct {
 	Criteria *string `toml:"criteria"`
 }
 
-// ClassifierConfig configures built-in and custom classes by exact name.
+// ClassifierConfig configures sender bypasses and classes by exact name.
 // The zero value preserves all built-in classes and criteria.
 type ClassifierConfig struct {
-	Classes map[string]ClassConfig `toml:"classes"`
+	Classes           map[string]ClassConfig `toml:"classes"`
+	SkipSenderDomains []string               `toml:"skip_sender_domains"`
 }
 
 // Classifier sends bounded email representations to OpenRouter's TypeSafe API.
 type Classifier struct {
-	apiKey   string
-	client   *http.Client
-	endpoint string
-	model    string
-	criteria map[string]string
+	apiKey            string
+	client            *http.Client
+	endpoint          string
+	model             string
+	criteria          map[string]string
+	skipSenderDomains []string
 }
 
 const (
@@ -102,8 +107,8 @@ func NewClassifier(apiKey string) (*Classifier, error) {
 	return NewClassifierWithConfig(apiKey, ClassifierConfig{})
 }
 
-// NewClassifierWithConfig creates a classifier with its own active class criteria.
-// Invalid names, blank criteria, and configurations with no active classes are rejected.
+// NewClassifierWithConfig validates and copies sender domains and class criteria.
+// Invalid domains or names, blank criteria, and no active classes are rejected.
 func NewClassifierWithConfig(apiKey string, cfg ClassifierConfig) (*Classifier, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
@@ -136,12 +141,22 @@ func NewClassifierWithConfig(apiKey string, cfg ClassifierConfig) (*Classifier, 
 		return nil, errors.New("at least one active class is required")
 	}
 
+	domains := make([]string, len(cfg.SkipSenderDomains))
+	for i, domain := range cfg.SkipSenderDomains {
+		domain = strings.ToLower(strings.TrimSpace(domain))
+		if !validDomain(domain) {
+			return nil, fmt.Errorf("invalid skip sender domain %q", cfg.SkipSenderDomains[i])
+		}
+		domains[i] = domain
+	}
+
 	return &Classifier{
-		criteria: criteria,
-		apiKey:   apiKey,
-		client:   &http.Client{Timeout: 30 * time.Second, CheckRedirect: refuseRedirects},
-		endpoint: defaultOpenRouterEndpoint,
-		model:    defaultJevModel,
+		skipSenderDomains: domains,
+		criteria:          criteria,
+		apiKey:            apiKey,
+		client:            &http.Client{Timeout: 30 * time.Second, CheckRedirect: refuseRedirects},
+		endpoint:          defaultOpenRouterEndpoint,
+		model:             defaultJevModel,
 	}, nil
 }
 
@@ -160,6 +175,57 @@ func validateClassName(name string) error {
 		return fmt.Errorf("invalid class name %q", name)
 	}
 	return nil
+}
+
+func validDomain(domain string) bool {
+	if domain == "" || len(domain) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(domain, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, ch := range label {
+			if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (c *Classifier) skipSender(message Message) bool {
+	if len(c.skipSenderDomains) == 0 {
+		return false
+	}
+	var from []string
+	for name, values := range message.Headers {
+		if strings.EqualFold(name, "From") {
+			from = append(from, values...)
+		}
+	}
+	if len(from) != 1 {
+		return false
+	}
+	address, err := mail.ParseAddress(from[0])
+	if err != nil {
+		return false
+	}
+	// Quoted local parts may themselves contain @.
+	at := strings.LastIndexByte(address.Address, '@')
+	if at < 0 {
+		return false
+	}
+	domain := strings.ToLower(address.Address[at+1:])
+	if !validDomain(domain) {
+		return false
+	}
+	for _, skipped := range c.skipSenderDomains {
+		if domain == skipped || strings.HasSuffix(domain, "."+skipped) {
+			return true
+		}
+	}
+	return false
 }
 
 func refuseRedirects(*http.Request, []*http.Request) error {
@@ -200,6 +266,13 @@ func (c *Classifier) Classify(ctx context.Context, message Message) (Result, err
 	}
 	if c.client == nil || c.endpoint == "" || c.model == "" || c.apiKey == "" || len(c.criteria) == 0 {
 		return Result{}, errors.New("classifier is not configured")
+	}
+
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	if c.skipSender(message) {
+		return Result{Skipped: true}, nil
 	}
 
 	state := formatState(message)

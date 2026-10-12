@@ -19,8 +19,8 @@ trap 'rm -rf "$work"' EXIT
 rpm -qp --qf '[%{FILENAMES} %{FILEMODES:perms} %{FILEUSERNAME} %{FILEGROUPNAME} %{FILEFLAGS:fflags}\n]' "$package" | sort > "$work/files"
 cat > "$work/expected" <<'EOF'
 /etc/typemail drwxr-x--- root typemail 
-/etc/typemail/classes.toml -rw-r----- root typemail cn
 /etc/typemail/milter.env -rw------- root root cn
+/etc/typemail/typemail.toml -rw-r----- root typemail cn
 /usr/bin/typemail-milter -rwxr-xr-x root root 
 /usr/lib/systemd/system/typemail-milter.service -rw-r--r-- root root 
 EOF
@@ -36,7 +36,7 @@ grep -Ev '^(/bin/sh|postfix|systemd|shadow-utils|ca-certificates|rpmlib\(Compres
 
 mkdir "$work/payload"
 (cd "$work/payload" && rpm2cpio "$package" | cpio -idm --quiet --no-absolute-filenames)
-cmp "$root/typemail.example.toml" "$work/payload/etc/typemail/classes.toml"
+cmp "$root/typemail.example.toml" "$work/payload/etc/typemail/typemail.toml"
 cmp "$root/deploy/typemail-milter.service" "$work/payload/usr/lib/systemd/system/typemail-milter.service"
 [[ ! -s $work/payload/etc/typemail/milter.env ]]
 binary="$work/payload/usr/bin/typemail-milter"

@@ -26,6 +26,9 @@ func LoadClassifierConfig(path string) (typemail.ClassifierConfig, error) {
 		}
 		// TOML struct decoding ignores case, but setting names must match exactly.
 		for _, key := range metadata.Keys() {
+			if len(key) == 1 && key[0] == "skip_sender_domains" {
+				continue
+			}
 			if key[0] != "classes" || (len(key) >= 3 && key[2] != "enabled" && key[2] != "criteria") {
 				return cfg, fmt.Errorf("config %q: unknown key: %s", path, key)
 			}

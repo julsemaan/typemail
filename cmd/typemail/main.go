@@ -213,6 +213,7 @@ func sanitizeField(value string) string {
 type runSummary struct {
 	counts   map[typemail.Class]int
 	failures int
+	skipped  int
 	total    int
 }
 
@@ -238,6 +239,12 @@ func outputResults(stdout, stderr io.Writer, results <-chan classificationResult
 			}
 			continue
 		}
+		if result.result.Skipped {
+			summary.skipped++
+			_, _ = fmt.Fprintf(writer, "%d\t%s\t%s\tskipped\t-\n",
+				result.uid, sanitizeField(result.from), sanitizeField(result.subject))
+			continue
+		}
 		if result.skipped != "" {
 			_, _ = fmt.Fprintf(stderr, "UID %d: skipped rewrite: %s\n", result.uid, result.skipped)
 		}
@@ -260,6 +267,7 @@ func writeSummary(w io.Writer, summary runSummary, active []typemail.Class) {
 	for _, class := range active {
 		_, _ = fmt.Fprintf(w, "%s: %d\n", class, summary.counts[class])
 	}
+	_, _ = fmt.Fprintf(w, "Skipped: %d\n", summary.skipped)
 	_, _ = fmt.Fprintf(w, "Failures: %d\n", summary.failures)
 }
 

@@ -44,7 +44,7 @@ Diagnostics decode only the provider's `error.message` from responses up to 4 Ki
 
 Each successful result includes the selected class, confidence, one probability per active class, and the concrete model identifier returned by OpenRouter.
 
-## Class configuration
+## Configuration
 
 Load an optional TOML file explicitly. The CLI does not discover files automatically, and credentials and other flags are unchanged.
 
@@ -53,6 +53,9 @@ go run ./cmd/typemail -config typemail.toml
 ```
 
 ```toml
+# Optional sender bypass. Keep top-level settings before class sections.
+skip_sender_domains = ["semaan.ca"]
+
 # Replace a built-in's criteria.
 [classes.selling]
 criteria = """
@@ -71,7 +74,13 @@ criteria = "Purchase confirmations, invoices, and payment receipts."
 
 All built-ins start enabled with their existing criteria. Unmentioned built-ins and empty built-in sections remain unchanged. `enabled` defaults to `true` for every class. Supplied criteria replace the entire string. Custom classes require nonblank criteria even when disabled.
 
-Names are exact and case-sensitive. Blank names, surrounding whitespace, and control characters are rejected. Explicitly blank criteria, unknown settings, malformed TOML, and configurations with no active classes are also rejected before connecting to IMAP. No file, an empty file, or an empty `classes` table preserves defaults.
+Names are exact and case-sensitive. Blank names, surrounding whitespace, and control characters are rejected. Explicitly blank criteria, unknown settings, malformed TOML, and configurations with no active classes are also rejected before connecting to IMAP. No file, an empty file, or an empty `classes` table preserves class defaults.
+
+### Sender-domain bypass
+
+The optional top-level `skip_sender_domains` list skips classification for messages whose `From` header has a matching sender domain, case-insensitively and including subdomains. For example, `semaan.ca` also matches `mail.semaan.ca`, but not `notsemaan.ca` or `semaan.ca.evil.com`. Missing, malformed, duplicate, or multiple-mailbox `From` headers continue through Jev. An omitted or empty list disables this bypass. Empty entries, email addresses, URLs, and wildcard patterns are invalid. Keep the setting before any `[classes.*]` sections in TOML.
+
+Both the IMAP scanner and Milter leave skipped messages unchanged, including existing subject tags and class markers, without an OpenRouter request. The scanner reports skipped UIDs and counts them separately from classes and failures. `From` is spoofable. This is a convenience bypass, not sender authentication or a security allowlist; it does not use the SMTP envelope sender or `Reply-To`.
 
 Requests and results use only active classes. Totals list every active class, including zero counts, and omit disabled classes.
 
@@ -113,12 +122,13 @@ classifier, err := typemail.NewClassifier(apiKey)
 result, err := classifier.Classify(ctx, message)
 ```
 
-To configure library classes, use optional pointers to distinguish omitted values from explicit overrides:
+To configure the library, set `SkipSenderDomains` for the sender bypass and use optional pointers for class settings to distinguish omitted values from explicit overrides:
 
 ```go
 criteria := "Purchase confirmations, invoices, and payment receipts."
 enabled := false
 classifier, err := typemail.NewClassifierWithConfig(apiKey, typemail.ClassifierConfig{
+    SkipSenderDomains: []string{"semaan.ca"},
     Classes: map[string]typemail.ClassConfig{
         "receipts":   {Criteria: &criteria},
         "suspicious": {Enabled: &enabled},
@@ -126,7 +136,7 @@ classifier, err := typemail.NewClassifierWithConfig(apiKey, typemail.ClassifierC
 })
 ```
 
-`NewClassifier` preserves defaults. `NewClassifierWithConfig` validates and copies the configuration. `classifier.Classes()` returns a fresh, sorted slice of active names. Custom results use `typemail.Class` with the configured name.
+`NewClassifier` preserves defaults. `NewClassifierWithConfig` validates and copies the configuration. `classifier.Classes()` returns a fresh, sorted slice of active names. Custom results use `typemail.Class` with the configured name. For a sender-domain bypass, `Classify` returns `Result.Skipped = true` with all remaining result fields empty or zero and a nil error. Callers must check `Skipped` before treating the result as a classification.
 
 Library callers choose their own body limit through the `ParseMessage` argument; the CLI default does not apply.
 
@@ -150,7 +160,7 @@ Build locally on a supported Linux host with Go 1.23 or newer, Bash, and `rpmbui
 scp dist/typemail-milter-0.1.0-1.el7.x86_64.rpm root@mail.example.com:/tmp/
 ```
 
-An optional numeric release defaults to `1`, for example `./deploy/build-rpm.sh 0.1.0 2`. The build targets static Linux amd64 with `GOAMD64=v1` and creates an RPM v4 package with gzip compression. Only the binary, service unit, and public class template enter the package. Local `typemail.toml` and credentials are never copied.
+An optional numeric release defaults to `1`, for example `./deploy/build-rpm.sh 0.1.0 2`. The build targets static Linux amd64 with `GOAMD64=v1` and creates an RPM v4 package with gzip compression. Only the binary, service unit, and public configuration template enter the package. Local `typemail.toml` and credentials are never copied.
 
 On the CentOS 7 server, as root:
 
@@ -158,21 +168,27 @@ On the CentOS 7 server, as root:
 yum localinstall /tmp/typemail-milter-0.1.0-1.el7.x86_64.rpm
 # Edit /etc/typemail/milter.env to contain OPENROUTER_API_KEY=your-key.
 # Use an editor, not shell history. The file starts empty and is root-only.
-# Optionally edit /etc/typemail/classes.toml to customize classes.
+# Optionally edit /etc/typemail/typemail.toml to customize classes and sender bypasses.
 systemctl enable typemail-milter
 systemctl start typemail-milter
 journalctl -u typemail-milter
 ```
 
-The RPM installs `/usr/bin/typemail-milter` and `/usr/lib/systemd/system/typemail-milter.service`, creates the system account and group if absent, and depends on Postfix, systemd, shadow-utils, and CA certificates. `/etc/typemail` is `root:typemail` with mode `0750`; `classes.toml` is `root:typemail` with mode `0640`; `milter.env` is `root:root` with mode `0600`. Installation reloads systemd but never enables or starts the service and never changes Postfix configuration.
+The RPM installs `/usr/bin/typemail-milter` and `/usr/lib/systemd/system/typemail-milter.service`, creates the system account and group if absent, and depends on Postfix, systemd, shadow-utils, and CA certificates. `/etc/typemail` is `root:typemail` with mode `0750`; `typemail.toml` is `root:typemail` with mode `0640`; `milter.env` is `root:root` with mode `0600`. Installation reloads systemd but never enables or starts the service and never changes Postfix configuration.
 
-The unit uses directives available in CentOS 7's systemd 219 and runs as an unprivileged account. systemd reads the root-only environment file before dropping privileges. The class file uses the same strict TOML settings as the scanner. No IMAP credentials or debug flag are needed.
+The unit uses directives available in CentOS 7's systemd 219 and runs as an unprivileged account. systemd reads the root-only environment file before dropping privileges. The configuration file uses the same strict TOML settings as the scanner, including `skip_sender_domains`. No IMAP credentials or debug flag are needed.
 
-Startup reads `/usr/sbin/postconf -xh mynetworks` from the local Postfix configuration. Literal IPv4/IPv6 CIDRs and individual addresses are supported, including bracketed IPv6. Lookup tables or other nonliteral entries, an empty network list, invalid classifier settings, and a missing API key stop startup visibly. There is no second trusted-network list. Restart typemail whenever `mynetworks`, its class configuration, or credentials change. Postfix must use the same local configuration read by `postconf`.
+Startup reads `/usr/sbin/postconf -xh mynetworks` from the local Postfix configuration. Literal IPv4/IPv6 CIDRs and individual addresses are supported, including bracketed IPv6. Lookup tables or other nonliteral entries, an empty network list, invalid classifier settings, and a missing API key stop startup visibly. There is no second trusted-network list. Restart typemail whenever `mynetworks`, its configuration, or credentials change. Postfix must use the same local configuration read by `postconf`.
 
 ### RPM upgrades, downgrade, and removal
 
-Transfer the new RPM, then upgrade as root:
+The installed configuration is now `/etc/typemail/typemail.toml`, replacing `/etc/typemail/classes.toml`. RPM does not migrate edits across renamed paths. Before upgrading from a package using the old name, copy the existing file as root, preserving its `root:typemail` ownership and `0640` mode:
+
+```sh
+cp -p /etc/typemail/classes.toml /etc/typemail/typemail.toml
+```
+
+If the destination already exists, back it up and merge your settings rather than overwriting it. Transfer the new RPM, then upgrade as root:
 
 ```sh
 yum localinstall /tmp/typemail-milter-0.1.1-1.el7.x86_64.rpm
@@ -181,7 +197,14 @@ systemctl restart typemail-milter
 
 RPM upgrades preserve enablement and running state. They do not restart the daemon; explicitly restart a running service to activate the new binary. Both configuration files use `%config(noreplace)`, so local edits survive upgrades and downgrades. Review any `.rpmnew` files before merging template changes.
 
-To downgrade, retain or rebuild the older RPM, transfer it, and run:
+Before downgrading to a package using `classes.toml`, reverse the copy as root. Back up any existing destination first, then remove `skip_sender_domains` from the copied file because older versions do not support it:
+
+```sh
+cp -p /etc/typemail/typemail.toml /etc/typemail/classes.toml
+# Edit /etc/typemail/classes.toml to remove skip_sender_domains, if present.
+```
+
+Retain or rebuild the older RPM, transfer it, and run:
 
 ```sh
 yum downgrade /tmp/typemail-milter-0.1.0-1.el7.x86_64.rpm

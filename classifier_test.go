@@ -57,6 +57,87 @@ func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	}
 }
 
+func TestClassifierSkipSenderDomains(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		headers map[string][]string
+		skip    bool
+	}{
+		{"exact", map[string][]string{"From": {"julien@semaan.ca"}}, true},
+		{"nested", map[string][]string{"From": {"julien@a.mail.semaan.ca"}}, true},
+		{"case and display name", map[string][]string{"fRoM": {"Julien <JULIEN@SEMAAN.CA>"}}, true},
+		{"lookalike", map[string][]string{"From": {"a@notsemaan.ca"}}, false},
+		{"suffix", map[string][]string{"From": {"a@semaan.ca.evil.com"}}, false},
+		{"missing", nil, false},
+		{"malformed", map[string][]string{"From": {"not a mailbox"}}, false},
+		{"malformed domain", map[string][]string{"From": {"a@bad..semaan.ca"}}, false},
+		{"invalid domain label", map[string][]string{"From": {"a@-bad.semaan.ca"}}, false},
+		{"multiple", map[string][]string{"From": {"a@semaan.ca, b@semaan.ca"}}, false},
+		{"duplicate", map[string][]string{"From": {"a@semaan.ca", "b@semaan.ca"}}, false},
+		{"duplicate case", map[string][]string{"From": {"a@semaan.ca"}, "from": {"b@semaan.ca"}}, false},
+		{"multiple in group", map[string][]string{"From": {"Team: a@semaan.ca, b@semaan.ca;"}}, false},
+		{"quoted local part", map[string][]string{"From": {`"a@b"@semaan.ca`}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				writeJSON(t, w, validResponse())
+			}))
+			defer server.Close()
+			domains := []string{" SeMaAn.Ca "}
+			c, err := NewClassifierWithConfig("test-key", ClassifierConfig{SkipSenderDomains: domains})
+			if err != nil {
+				t.Fatal(err)
+			}
+			domains[0] = "evil.com" // The classifier owns a normalized copy.
+			c.endpoint, c.client = server.URL, server.Client()
+			result, err := c.Classify(context.Background(), Message{Headers: tc.headers})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.skip {
+				if !reflect.DeepEqual(result, Result{Skipped: true}) || calls.Load() != 0 {
+					t.Fatalf("result=%#v requests=%d", result, calls.Load())
+				}
+			} else if result.Skipped || result.Class != ClassPhishing || calls.Load() != 1 {
+				t.Fatalf("result=%#v requests=%d", result, calls.Load())
+			}
+		})
+	}
+}
+
+func TestSkipSenderDomainsValidation(t *testing.T) {
+	for _, domain := range []string{"", " ", "a@semaan.ca", "https://semaan.ca", "*.semaan.ca", ".semaan.ca", "semaan.ca.", "bad..ca", "-bad.ca", "bad-.ca", "bad_ca", "a/b.ca", strings.Repeat("a", 64) + ".ca"} {
+		if _, err := NewClassifierWithConfig("key", ClassifierConfig{SkipSenderDomains: []string{domain}}); err == nil {
+			t.Errorf("accepted domain %q", domain)
+		}
+	}
+	for _, domains := range [][]string{nil, {}} {
+		c, server := classifierForServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { writeJSON(t, w, validResponse()) }))
+		c.skipSenderDomains = domains
+		result, err := c.Classify(context.Background(), Message{Headers: map[string][]string{"From": {"a@semaan.ca"}}})
+		server.Close()
+		if err != nil || result.Skipped || result.Class != ClassPhishing {
+			t.Fatalf("result=%#v err=%v", result, err)
+		}
+	}
+	c, err := NewClassifierWithConfig("key", ClassifierConfig{SkipSenderDomains: []string{"semaan.ca"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := c.Classify(ctx, Message{Headers: map[string][]string{"From": {"a@semaan.ca"}}})
+	if !errors.Is(err, context.Canceled) || result.Skipped {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	c.client = nil
+	if result, err := c.Classify(context.Background(), Message{Headers: map[string][]string{"From": {"a@semaan.ca"}}}); err == nil || result.Skipped {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
 func TestClassifierRequestAndResponse(t *testing.T) {
 	classifier, server := classifierForServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/systemone" {
