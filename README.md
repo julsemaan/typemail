@@ -132,9 +132,87 @@ Library callers choose their own body limit through the `ParseMessage` argument;
 
 The library uses `github.com/emersion/go-imap/v2` for IMAP integration and `github.com/emersion/go-message` for RFC 822 and MIME parsing. It does not include an OpenRouter SDK.
 
+## Incoming Postfix subject tagging
+
+`typemail-milter` is an optional, fail-open Milter for CentOS 7 and Postfix 2.10.1. It listens only on `127.0.0.1:8892`, uses protocol 2, and adds `[class]` to incoming subjects and `X-Typemail-Class` to headers. It requests only header addition and change capabilities, never body or envelope changes. The IMAP scanner is unchanged.
+
+Only attach it to the port-25 `smtp inet` service. The daemon bypasses clients in Postfix's `mynetworks`, authenticated senders identified by `{auth_type}` or `{auth_authen}`, and unknown or non-TCP connection identities. The service override keeps submission, SMTPS, trusted outgoing relay paths, and local mail outside typemail. The Connect callback's port is the client's source port, not the receiving service port, so service placement is required.
+
+Headers and body share a 1 MiB buffer limit. Oversized messages and duplicate Subject or class-marker headers pass unchanged. Five classifications can run at once; a sixth passes unchanged without waiting. Parsing retains the existing 16 KiB decoded inline-text limit and excludes attachments. Classification and all provider retries share a four-second deadline. Parsing, provider, rendering, cancellation, and header-write failures never request rejection, temporary failure, discard, or quarantine. Failures before modification leave headers untouched; a failed later header write can leave a partial tag. Logs contain fixed failure reasons, not message content or credentials. Selected headers and inline text still go to OpenRouter and TypeSafe as described above.
+
+### Install on CentOS 7
+
+Build a static Linux amd64 binary on a supported build host with Go 1.23 or newer, not on CentOS 7:
+
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o typemail-milter ./cmd/typemail-milter
+```
+
+Copy that binary and `deploy/typemail-milter.service` to the server. As root:
+
+```sh
+useradd --system --no-create-home --shell /sbin/nologin typemail
+install -m 0755 typemail-milter /usr/local/bin/typemail-milter
+install -d -o root -g typemail -m 0750 /etc/typemail
+install -o root -g typemail -m 0640 typemail.toml /etc/typemail/classes.toml
+install -o root -g root -m 0600 /dev/null /etc/typemail/milter.env
+# Edit milter.env to contain OPENROUTER_API_KEY=your-key. Do not put it in shell history.
+install -m 0644 deploy/typemail-milter.service /etc/systemd/system/typemail-milter.service
+systemctl daemon-reload
+systemctl enable typemail-milter
+systemctl start typemail-milter
+journalctl -u typemail-milter
+```
+
+The unit uses directives available in CentOS 7's systemd 219 and runs as an unprivileged account. systemd reads the root-only environment file before dropping privileges. The class file uses the same strict TOML settings as the scanner. No IMAP credentials or debug flag are needed.
+
+Startup reads `/usr/sbin/postconf -xh mynetworks` from the local Postfix configuration. Literal IPv4/IPv6 CIDRs and individual addresses are supported, including bracketed IPv6. Lookup tables or other nonliteral entries, an empty network list, invalid classifier settings, and a missing API key stop startup visibly. There is no second trusted-network list. Restart typemail whenever `mynetworks`, its class configuration, or credentials change. Postfix must use the same local configuration read by `postconf`.
+
+### Postfix configuration
+
+Back up `/etc/postfix/main.cf` and `/etc/postfix/master.cf`, including any existing port-25 timeout overrides. Identify the existing filter on port 8891 and its signing or verification role before deploying. Verify that Postfix sends `{auth_type}` and `{auth_authen}` at MAIL FROM under protocol 2, using `postconf milter_mail_macros` and an authenticated staging SMTP test. Preserve any existing macro settings; do not deploy without a working authentication bypass.
+
+Keep these existing `main.cf` values unchanged:
+
+```text
+smtpd_milters = inet:127.0.0.1:8891
+non_smtpd_milters = $smtpd_milters
+milter_default_action = accept
+milter_protocol = 2
+```
+
+Retain the existing `smtp inet` line and its `-o content_filter=spamassassin` in `master.cf`. Add or replace only these overrides on that service, without duplicate options:
+
+```text
+  -o smtpd_milters=inet:127.0.0.1:8891,inet:127.0.0.1:8892
+  -o milter_default_action=accept
+  -o milter_connect_timeout=1s
+  -o milter_command_timeout=5s
+  -o milter_content_timeout=5s
+```
+
+Do not change submission, SMTPS, `smtpsemaan`, or non-SMTP filtering. SpamAssassin's `sendmail` reinjection uses the unchanged `non_smtpd_milters`, so it does not invoke typemail again. Preserve all restrictions and security filters. Check the configuration with `postfix check`, then `postfix reload`.
+
+The five-second command/content timeouts also apply to the existing inbound Milter at 8891. These bound individual Milter stages, not the entire SMTP transaction. `accept` is a fallback for unavailable or failed filters, not an override of existing security-policy rejections. Subject changes can invalidate DKIM signatures during later verification, or signatures created by the earlier Milter. Understand the complete signing and authentication pipeline before enabling this.
+
+Protocol and macro references: [Postfix Milter support](https://www.postfix.org/MILTER_README.html), [Postfix parameters](https://www.postfix.org/postconf.5.html#milter_protocol), and the pinned [go-milter v0.4.1 implementation](https://github.com/emersion/go-milter/tree/v0.4.1). The library implements protocol 2; continuation responses preserve connection identity between transactions.
+
+### Staging and rollback
+
+On staging Postfix 2.10.1, check the complete SpamAssassin pipeline before production:
+
+- Untrusted unauthenticated port-25 mail receives one tag, including custom classes, encoded subjects, and messages without a subject.
+- Trusted, authenticated, submission, SMTPS, and local messages remain untouched by typemail.
+- Stop, kill, and freeze the daemon. Confirm delivery without classifier-related rejection or retry. For a freeze test, send SIGSTOP and restore with SIGCONT afterward.
+- Simulate provider outages and hangs. Confirm unchanged delivery when slots fill or the four-second deadline expires.
+- Compare delivered MIME bodies and attachments with the originals. Verify that reinjection never adds another typemail tag.
+- Check existing signing, DKIM verification, authentication results, restrictions, and the filter at 8891 for expected behavior under the shared timeouts.
+
+Rollback by restoring the previous port-25 Milter overrides and timeout values from the backup, then running `postfix check` and `postfix reload`. Leave the original 8891 and non-SMTP configuration intact. After reload, stop and disable `typemail-milter`. Already delivered tags are not removed by rollback.
+
 ## Current exclusions
 
-- Postfix or Cyrus integration
+- Cyrus-specific integration
 - Moving messages or deleting them outside subject replacement
 - Attachment inspection
 - OAuth authentication
@@ -148,6 +226,9 @@ The library uses `github.com/emersion/go-imap/v2` for IMAP integration and `gith
 gofmt -w .
 go test -race ./...
 go vet ./...
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./cmd/typemail-milter
 ```
+
+Protocol-2 wire tests cover header tagging, bypasses, repeated transactions and aborts, MIME limits, failures, retries, cancellation, and saturation. They cannot verify the real Postfix/SpamAssassin pipeline; the staging checks above remain required.
 
 Local scripted IMAP tests cover read-only defaults, capabilities, targeted replacement and expunge, failure paths, cancellation, FETCH draining, and serialization. A disposable real-mailbox check is still required to verify server behavior, flag and date preservation, client refreshes, and unchanged attachments.

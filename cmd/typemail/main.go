@@ -14,15 +14,15 @@ import (
 	"text/tabwriter"
 	"unicode"
 
-	"github.com/BurntSushi/toml"
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 	"typemail"
+	"typemail/internal/cli"
 )
 
 const (
-	defaultConcurrency   = 5
-	defaultMaxEmailBytes = 16 << 10
+	defaultConcurrency   = cli.DefaultConcurrency
+	defaultMaxEmailBytes = cli.DefaultMaxEmailBytes
 )
 
 var errMessageFailures = errors.New("one or more messages failed")
@@ -62,21 +62,9 @@ func loadConfig(args []string, getenv func(string) string) (config, error) {
 		return config{}, errors.New("max-email-bytes must be at least 1")
 	}
 
-	var classifierConfig typemail.ClassifierConfig
-	if *configPath != "" {
-		metadata, err := toml.DecodeFile(*configPath, &classifierConfig)
-		if err != nil {
-			return config{}, fmt.Errorf("decode config %q: %w", *configPath, err)
-		}
-		if keys := metadata.Undecoded(); len(keys) > 0 {
-			return config{}, fmt.Errorf("config %q: unknown keys: %v", *configPath, keys)
-		}
-		// TOML struct decoding ignores case, but setting names must match exactly.
-		for _, key := range metadata.Keys() {
-			if key[0] != "classes" || (len(key) >= 3 && key[2] != "enabled" && key[2] != "criteria") {
-				return config{}, fmt.Errorf("config %q: unknown key: %s", *configPath, key)
-			}
-		}
+	classifierConfig, err := cli.LoadClassifierConfig(*configPath)
+	if err != nil {
+		return config{}, err
 	}
 
 	values := make(map[string]string, 4)

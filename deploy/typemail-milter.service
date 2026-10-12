@@ -1,0 +1,21 @@
+[Unit]
+Description=Typemail incoming subject tagging Milter
+After=network-online.target postfix.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=typemail
+Group=typemail
+EnvironmentFile=/etc/typemail/milter.env
+ExecStart=/usr/local/bin/typemail-milter -config /etc/typemail/classes.toml
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
