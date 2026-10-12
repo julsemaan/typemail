@@ -1,0 +1,214 @@
+name: Package and release
+
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Package version
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ $EVENT == pull_request ]]; then
+            version=0.0.2
+          else
+            [[ $TAG =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+              echo 'Only vMAJOR.MINOR.PATCH release tags are supported.' >&2
+              exit 1
+            }
+            version=${TAG#v}
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+          # Stable archives let full reruns reuse identical draft assets.
+          printf '%s\n' '%_buildhost github-actions' '%use_source_date_epoch_as_buildtime 1' '%clamp_mtime_to_source_date_epoch 1' >> "$HOME/.rpmmacros"
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y rpm cpio binutils
+      - name: Go checks
+        run: |
+          go test -race ./...
+          go vet ./...
+      - name: Build and inspect release packages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ./deploy/build-rpm.sh "$VERSION"
+          ./deploy/check-rpm.sh "dist/typemail-milter-$VERSION-1.x86_64.rpm" "$VERSION" 1
+          ./deploy/build-deb.sh "$VERSION"
+          ./deploy/check-deb.sh "dist/typemail-milter_${VERSION}-1_amd64.deb" "$VERSION" 1
+      - name: Build lifecycle fixtures
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Older upstream version; lower revision also covers a v0.0.0 release.
+          ./deploy/build-deb.sh 0.0.0 0
+          ./deploy/check-deb.sh dist/typemail-milter_0.0.0-0_amd64.deb 0.0.0 0
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          cp -a deploy cmd internal pkg go.mod go.sum typemail.example.toml "$work/"
+          sed -i 's/%{package_release}$/%{package_release}.el7/' "$work/deploy/typemail-milter.spec"
+          # shellcheck disable=SC2016
+          sed -i 's/\$release.x86_64/\$release.el7.x86_64/' "$work/deploy/build-rpm.sh"
+          "$work/deploy/build-rpm.sh" 0.0.0 0
+          cp "$work/dist/typemail-milter-0.0.0-0.el7.x86_64.rpm" dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          if-no-files-found: error
+          path: |
+            dist/typemail-milter-${{ steps.version.outputs.version }}-1.x86_64.rpm
+            dist/typemail-milter_${{ steps.version.outputs.version }}-1_amd64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-fixtures
+          if-no-files-found: error
+          path: |
+            dist/typemail-milter-0.0.0-0.el7.x86_64.rpm
+            dist/typemail-milter_0.0.0-0_amd64.deb
+
+  install:
+    needs: build
+    # Hosted x64 Ubuntu 24.04 runners support the x86-64-v3 EL10 baseline.
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {image: 'debian:12', format: deb}
+          - {image: 'debian:13', format: deb}
+          - {image: 'ubuntu:22.04', format: deb}
+          - {image: 'ubuntu:24.04', format: deb}
+          - {image: 'ubuntu:26.04', format: deb}
+          - {image: 'quay.io/centos/centos:stream9', format: rpm}
+          - {image: 'quay.io/centos/centos:stream10', format: rpm}
+          - {image: 'rockylinux:8', format: rpm}
+          - {image: 'rockylinux:9', format: rpm}
+          - {image: 'rockylinux:10', format: rpm}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-packages
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: lifecycle-fixtures
+          path: dist
+      - name: Install, upgrade, downgrade, and remove
+        env:
+          IMAGE: ${{ matrix.image }}
+          FORMAT: ${{ matrix.format }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if [[ $IMAGE == *10 ]]; then
+            for flag in avx avx2 bmi1 bmi2 f16c fma movbe xsave; do
+              grep -qw "$flag" /proc/cpuinfo || { echo "EL10 requires x86-64-v3: missing $flag" >&2; exit 1; }
+            done
+          fi
+          if [[ $FORMAT == deb ]]; then
+            package="/src/dist/typemail-milter_${VERSION}-1_amd64.deb"
+            older="/src/dist/typemail-milter_0.0.0-0_amd64.deb"
+          else
+            package="/src/dist/typemail-milter-$VERSION-1.x86_64.rpm"
+            older="/src/dist/typemail-milter-0.0.0-0.el7.x86_64.rpm"
+          fi
+          docker run --rm --platform linux/amd64 -v "$PWD:/src:ro" "$IMAGE" \
+            bash /src/deploy/smoke-install.sh "$package" "$older"
+
+  legacy-install:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-packages
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: lifecycle-fixtures
+          path: dist
+      - name: CentOS 7 end-of-life archive check
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          docker run --rm --platform linux/amd64 -v "$PWD:/src:ro" -e VERSION centos:7 bash -euc '
+            # CentOS 7 is EOL; never use its retired mirrorlist.
+            rm -f /etc/yum.repos.d/*.repo
+            printf "%s\n" \
+              "[base]" "name=CentOS 7 vault base" \
+              "baseurl=https://vault.centos.org/7.9.2009/os/\$basearch/" \
+              "[updates]" "name=CentOS 7 vault updates" \
+              "baseurl=https://vault.centos.org/7.9.2009/updates/\$basearch/" \
+              "[extras]" "name=CentOS 7 vault extras" \
+              "baseurl=https://vault.centos.org/7.9.2009/extras/\$basearch/" \
+              > /etc/yum.repos.d/vault.repo
+            # Keep signature verification enabled for every archived repository.
+            sed -i "/baseurl=/a enabled=1\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7" /etc/yum.repos.d/vault.repo
+            bash /src/deploy/smoke-install.sh \
+              "/src/dist/typemail-milter-$VERSION-1.x86_64.rpm" \
+              "/src/dist/typemail-milter-0.0.0-0.el7.x86_64.rpm"
+          '
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [build, install, legacy-install]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-packages
+          path: dist
+      - name: Publish validated packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          # The build job validated TAG. Published releases are immutable here.
+          gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > releases.json
+          id=$(jq -r --arg tag "$TAG" '.[][] | select(.tag_name == $tag) | .id' releases.json)
+          if [[ -n $id ]]; then
+            [[ $(gh api "repos/$GH_REPO/releases/$id" --jq .draft) == true ]] || {
+              echo 'Release is already published; leaving its assets unchanged.'
+              exit 0
+            }
+          else
+            gh release create "$TAG" --verify-tag --draft --generate-notes --title "$TAG"
+          fi
+          # Reuse identical draft assets, never overwrite an asset on reruns.
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          gh release view "$TAG" --json assets --jq '.assets[].name' > "$work/assets"
+          for package in "dist/typemail-milter-$VERSION-1.x86_64.rpm" "dist/typemail-milter_${VERSION}-1_amd64.deb"; do
+            name=${package##*/}
+            if grep -Fxq "$name" "$work/assets"; then
+              gh release download "$TAG" --pattern "$name" --dir "$work"
+              cmp "$package" "$work/$name" || { echo "Conflicting draft asset: $name" >&2; exit 1; }
+            else
+              gh release upload "$TAG" "$package"
+            fi
+          done
+          gh release edit "$TAG" --draft=false

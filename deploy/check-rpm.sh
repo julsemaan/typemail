@@ -13,7 +13,7 @@ package=$(realpath "$1")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-[[ $(rpm -qp --qf '%{NAME} %{VERSION} %{RELEASE} %{ARCH} %{PAYLOADCOMPRESSOR}' "$package") == "typemail-milter $2 $3.el7 x86_64 gzip" ]]
+[[ $(rpm -qp --qf '%{NAME} %{VERSION} %{RELEASE} %{ARCH} %{PAYLOADCOMPRESSOR}' "$package") == "typemail-milter $2 $3 x86_64 gzip" ]]
 # RPM v4 packages have the classic lead, not the RPM v6 format.
 [[ $(od -An -tx1 -N8 "$package" | xargs) == 'ed ab ee db 03 00 00 00' ]]
 rpm -qp --qf '[%{FILENAMES} %{FILEMODES:perms} %{FILEUSERNAME} %{FILEGROUPNAME} %{FILEFLAGS:fflags}\n]' "$package" | sort > "$work/files"

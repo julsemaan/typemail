@@ -27,6 +27,6 @@ rpmbuild -bb --target x86_64 --define "_topdir $work" \
     --define "package_version $version" --define "package_release $release" \
     deploy/typemail-milter.spec
 mkdir -p dist
-package="typemail-milter-$version-$release.el7.x86_64.rpm"
+package="typemail-milter-$version-$release.x86_64.rpm"
 cp "$work/RPMS/x86_64/$package" "dist/$package"
 echo "Built $root/dist/$package"

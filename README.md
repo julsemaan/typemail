@@ -161,28 +161,47 @@ The commands use `github.com/emersion/go-imap/v2` for IMAP integration; `pkg/typ
 
 ## Incoming Postfix subject tagging
 
-`typemail-milter` is an optional, fail-open Milter for CentOS 7 and Postfix 2.10.1. It listens only on `127.0.0.1:8892`, uses protocol 2, and adds `[class]` to incoming subjects and `X-Typemail-Class` to headers. It requests only header addition and change capabilities, never body or envelope changes. The IMAP scanner is unchanged.
+`typemail-milter` is an optional, fail-open Milter for Postfix. It listens only on `127.0.0.1:8892`, uses protocol 2, and adds `[class]` to incoming subjects and `X-Typemail-Class` to headers. It requests only header addition and change capabilities, never body or envelope changes. The IMAP scanner is unchanged.
 
 Only attach it to the port-25 `smtp inet` service. The daemon bypasses clients in Postfix's `mynetworks`, authenticated senders identified by `{auth_type}` or `{auth_authen}`, and unknown or non-TCP connection identities. The service override keeps submission, SMTPS, trusted outgoing relay paths, and local mail outside typemail. The Connect callback's port is the client's source port, not the receiving service port, so service placement is required.
 
 Headers and body share a 1 MiB buffer limit. Oversized messages and duplicate Subject or class-marker headers pass unchanged. Five classifications can run at once; a sixth passes unchanged without waiting. Parsing retains the existing 16 KiB decoded inline-text limit and excludes attachments. Classification and all provider retries share a four-second deadline. Parsing, provider, rendering, cancellation, and header-write failures never request rejection, temporary failure, discard, or quarantine. Failures before modification leave headers untouched; a failed later header write can leave a partial tag. Logs contain fixed failure reasons, not message content or credentials. Selected headers and inline text still go to OpenRouter and TypeSafe as described above.
 
-### Install on CentOS 7
+### Install release packages
 
-Build locally on a supported Linux host with Go 1.23 or newer, Bash, and `rpmbuild`, not on CentOS 7. Install your distribution's RPM build tools, for example `rpm-build` on Fedora or `rpm` on Debian. Inspection also needs `rpm`, `rpm2cpio`, `cpio`, and `readelf` from binutils.
+Download an AMD64 package from [GitHub Releases](https://github.com/julsemaan/typemail/releases). `VERSION=0.1.0` below is a placeholder; choose a published version. A documented target is not a compatibility guarantee.
+
+| Distribution | Package | Architecture | Validation status |
+| --- | --- | --- | --- |
+| CentOS Stream 9, 10 | RPM | AMD64 | Container CI targeted; real-system acceptance pending |
+| Rocky Linux 8, 9, 10 | RPM | AMD64 | Container CI targeted; real-system acceptance pending |
+| CentOS 7, EOL | RPM | AMD64 | Legacy container CI targeted; real-system acceptance pending |
+| Debian 12, 13 | deb | AMD64 | Container CI targeted; real-system acceptance pending |
+| Ubuntu 22.04, 24.04, 26.04 | deb | AMD64 | Container CI targeted; real-system acceptance pending |
+
+The container matrix has not been verified this session. Containers cannot establish real systemd, SELinux, or Postfix runtime compatibility. CentOS 7 is end-of-life and is a legacy target, not a recommendation for new servers.
+
+On an RPM server:
 
 ```sh
-./deploy/build-rpm.sh 0.1.0
-./deploy/check-rpm.sh dist/typemail-milter-0.1.0-1.el7.x86_64.rpm 0.1.0 1
-scp dist/typemail-milter-0.1.0-1.el7.x86_64.rpm root@mail.example.com:/tmp/
+VERSION=0.1.0
+curl -fLO "https://github.com/julsemaan/typemail/releases/download/v${VERSION}/typemail-milter-${VERSION}-1.x86_64.rpm"
+sudo dnf install "./typemail-milter-${VERSION}-1.x86_64.rpm"
+# CentOS 7 only, instead of dnf:
+# sudo yum localinstall "./typemail-milter-${VERSION}-1.x86_64.rpm"
 ```
 
-An optional numeric release defaults to `1`, for example `./deploy/build-rpm.sh 0.1.0 2`. The build targets static Linux amd64 with `GOAMD64=v1` and creates an RPM v4 package with gzip compression. Only the binary, service unit, and public configuration template enter the package. Local `typemail.toml` and credentials are never copied.
-
-On the CentOS 7 server, as root:
+On a Debian or Ubuntu server:
 
 ```sh
-yum localinstall /tmp/typemail-milter-0.1.0-1.el7.x86_64.rpm
+VERSION=0.1.0
+curl -fLO "https://github.com/julsemaan/typemail/releases/download/v${VERSION}/typemail-milter_${VERSION}-1_amd64.deb"
+sudo apt install "./typemail-milter_${VERSION}-1_amd64.deb"
+```
+
+After either installation, as root:
+
+```sh
 # Edit /etc/typemail/milter.env to contain OPENROUTER_API_KEY=your-key.
 # Use an editor, not shell history. The file starts empty and is root-only.
 # Optionally edit /etc/typemail/typemail.toml to customize classes and sender bypasses.
@@ -191,7 +210,9 @@ systemctl start typemail-milter
 journalctl -u typemail-milter
 ```
 
-The RPM installs `/usr/bin/typemail-milter` and `/usr/lib/systemd/system/typemail-milter.service`, creates the system account and group if absent, and depends on Postfix, systemd, shadow-utils, and CA certificates. `/etc/typemail` is `root:typemail` with mode `0750`; `typemail.toml` is `root:typemail` with mode `0640`; `milter.env` is `root:root` with mode `0600`. Installation reloads systemd but never enables or starts the service and never changes Postfix configuration.
+Both packages install `/usr/bin/typemail-milter` and `/usr/lib/systemd/system/typemail-milter.service` and create the system account and group if absent. Dependencies include Postfix, systemd, CA certificates, and account-management tools. `/etc/typemail` is `root:typemail` with mode `0750`; `typemail.toml` is `root:typemail` with mode `0640`; `milter.env` is `root:root` with mode `0600`. Installation reloads systemd but never enables or starts the service and never changes Postfix configuration.
+
+On SELinux systems, keep enforcing mode enabled. Verify startup and mail delivery, inspect audit logs for denials, and check policy and port labels if required by the host's policy. Do not disable SELinux or apply an unverified policy to make the service run.
 
 The unit uses directives available in CentOS 7's systemd 219 and runs as an unprivileged account. systemd reads the root-only environment file before dropping privileges. The configuration file uses the same strict TOML settings as the scanner, including `skip_sender_domains`. No IMAP credentials or debug flag are needed.
 
@@ -211,22 +232,17 @@ journalctl -u typemail-milter
 
 Crashes and watchdog expiry trigger `Restart=on-failure` after five seconds. Manual stops do not restart the service. Graceful shutdown stops probes, reports `STOPPING=1`, closes the listener, and waits for the serving loop. Without `NOTIFY_SOCKET`, systemd integration is disabled and standalone behavior remains unchanged. With a notification socket, invalid watchdog durations or PIDs fail startup; `WATCHDOG_PID` must match the daemon for heartbeats to be enabled. Notification writes are bounded; readiness or heartbeat delivery failure exits nonzero, while informational status delivery is best-effort. No new CLI flags or configuration settings are needed.
 
-### RPM upgrades, downgrade, and removal
+### Package upgrades, downgrades, and removal
 
-The installed configuration is now `/etc/typemail/typemail.toml`, replacing `/etc/typemail/classes.toml`. RPM does not migrate edits across renamed paths. Before upgrading from a package using the old name, copy the existing file as root, preserving its `root:typemail` ownership and `0640` mode:
+The installed configuration is now `/etc/typemail/typemail.toml`, replacing `/etc/typemail/classes.toml`. Neither package format migrates edits across renamed paths. Before upgrading from a package using the old name, copy the existing file as root, preserving its `root:typemail` ownership and `0640` mode:
 
 ```sh
 cp -p /etc/typemail/classes.toml /etc/typemail/typemail.toml
 ```
 
-If the destination already exists, back it up and merge your settings rather than overwriting it. Transfer the new RPM, then upgrade as root:
+If the destination already exists, back it up and merge your settings rather than overwriting it. Download the desired release using the commands above with a new `VERSION`, then install it with `dnf install`, legacy `yum localinstall`, or `apt install` as appropriate.
 
-```sh
-yum localinstall /tmp/typemail-milter-0.1.1-1.el7.x86_64.rpm
-systemctl restart typemail-milter
-```
-
-RPM upgrades preserve enablement and running state. They do not restart the daemon; explicitly restart a running service to activate the new binary. Both configuration files use `%config(noreplace)`, so local edits survive upgrades and downgrades. Review any `.rpmnew` files before merging template changes.
+Upgrades and downgrades do not restart the daemon or change its enablement. Explicitly run `systemctl restart typemail-milter` after changing packages to activate the selected binary. RPM uses `%config(noreplace)` for both configuration files; retain local edits and review `.rpmnew` files. Debian packages register both files as conffiles; keep local versions when prompted and review `.dpkg-dist` or `.dpkg-old` files before merging template changes.
 
 Before downgrading to a package using `classes.toml`, reverse the copy as root. Back up any existing destination first, then remove `skip_sender_domains` from the copied file because older versions do not support it:
 
@@ -235,18 +251,22 @@ cp -p /etc/typemail/typemail.toml /etc/typemail/classes.toml
 # Edit /etc/typemail/classes.toml to remove skip_sender_domains, if present.
 ```
 
-Retain or rebuild the older RPM, transfer it, and run:
+Download the older release using the same URL pattern, then choose the appropriate downgrade command as root:
 
 ```sh
-yum downgrade /tmp/typemail-milter-0.1.0-1.el7.x86_64.rpm
+VERSION=0.1.0
+dnf downgrade "./typemail-milter-${VERSION}-1.x86_64.rpm"
+# CentOS 7 instead: yum downgrade "./typemail-milter-${VERSION}-1.x86_64.rpm"
+# Debian/Ubuntu instead:
+# apt install --allow-downgrades "./typemail-milter_${VERSION}-1_amd64.deb"
 systemctl restart typemail-milter
 ```
 
-Before removal, follow the Postfix rollback guidance below so the port-25 service no longer references typemail. Then run `yum remove typemail-milter`. Final removal stops and disables the service and reloads systemd. The account remains; RPM saves modified configuration as `.rpmsave` files. These may contain credentials, so keep them root-only or remove them securely when no longer needed.
+Before removal, follow the Postfix rollback guidance below so the port-25 service no longer references typemail. Run `dnf remove typemail-milter`, legacy `yum remove typemail-milter`, or `apt remove typemail-milter`. Removal stops and disables the service and reloads systemd; the service account and group remain. RPM saves modified configuration as `.rpmsave` files. Debian removal retains conffiles; `apt purge typemail-milter` removes the packaged configuration and its dpkg backup files, but retains the account and any unrelated administrator files. Back up needed settings before purging. Saved environment files may contain credentials, so keep them root-only or remove them securely when no longer needed.
 
 ### Postfix configuration
 
-These instructions target CentOS 7 and Postfix 2.10.1 and assume Postfix already receives external mail. Configuring a fresh mail server may require `main.cf` changes; integrating typemail into an already working server does not.
+These protocol-2 instructions retain the CentOS 7 and Postfix 2.10.1 baseline and assume Postfix already receives external mail. Verify the same integration on each target system. Configuring a fresh mail server may require `main.cf` changes; integrating typemail into an already working server does not.
 
 Back up `/etc/postfix/main.cf` and `/etc/postfix/master.cf`, including all existing port-25 overrides. Verify that Postfix sends `{auth_type}` and `{auth_authen}` at MAIL FROM under protocol 2, using `postconf milter_mail_macros` and an authenticated staging SMTP test. Preserve any existing macro settings; do not deploy without a working authentication bypass.
 
@@ -271,7 +291,7 @@ Protocol and macro references: Postfix 2.10.1's [master.cf syntax](https://githu
 
 ### Staging and rollback
 
-On disposable CentOS 7 staging with Postfix 2.10.1, run `postfix check` and test both a setup with no existing Milters and an existing-filter chain before production:
+On disposable staging for each target system, including the legacy CentOS 7 and Postfix 2.10.1 baseline, run `postfix check` and test both a setup with no existing Milters and an existing-filter chain before production:
 
 - Untrusted unauthenticated port-25 mail receives one tag, including custom classes, encoded subjects, and messages without a subject.
 - Trusted, authenticated, submission, SMTPS, and local messages remain untouched by typemail.
@@ -284,7 +304,7 @@ On disposable CentOS 7 staging with Postfix 2.10.1, run `postfix check` and test
 
 Rollback by restoring the previous port-25 overrides from the backup, then running `postfix check` and `postfix reload`. Leave global settings and all other services unchanged. After reload, stop and disable `typemail-milter`. Already delivered tags are not removed by rollback.
 
-Runtime validation on disposable CentOS 7 staging remains unverified. Local tests cannot establish real systemd readiness, watchdog restart, manual-stop behavior, delivery, bypass, fail-open, or existing-filter compatibility.
+Runtime validation on all target systems remains unverified. Local tests cannot establish real systemd readiness, watchdog restart, manual-stop behavior, delivery, bypass, fail-open, or existing-filter compatibility.
 
 ## Current exclusions
 
@@ -302,13 +322,51 @@ Runtime validation on disposable CentOS 7 staging remains unverified. Local test
 gofmt -w .
 go test -race ./...
 go vet ./...
-./deploy/build-rpm.sh 0.1.0
-./deploy/check-rpm.sh dist/typemail-milter-0.1.0-1.el7.x86_64.rpm 0.1.0 1
 ```
 
-RPM inspection checks metadata, dependencies, the exact file list, ownership, modes, configuration flags, gzip payload, and static binary linkage. It compares the packaged templates with the public sources and checks that the environment file is empty.
+### Developer package builds
 
-CentOS 7 package compatibility is accepted only after testing on a disposable CentOS 7 system with real systemd and Postfix. Test fresh RPM installation, upgrade, downgrade, and final removal. Edit both configuration files first and confirm preservation, `.rpmnew` or `.rpmsave` handling, root-only credential permissions, and retention of the service account. Check that installation leaves the service disabled and stopped, upgrades and downgrades preserve its prior running and enablement state, and removal stops and disables it. Confirm startup uses `/usr/bin/typemail-milter`, compare Postfix configuration against a pre-install backup, and run the fail-open staging checks above. Local inspection alone does not establish CentOS 7 compatibility.
+Build on a supported Linux host with Go 1.23 or newer and Bash, not CentOS 7. RPM builds need `rpmbuild`; inspection needs `rpm`, `rpm2cpio`, `cpio`, and binutils `readelf`. Debian builds need `dpkg-deb`; inspection also needs `tar` and `readelf`.
+
+```sh
+VERSION=0.1.0
+./deploy/build-rpm.sh "$VERSION"
+./deploy/check-rpm.sh "dist/typemail-milter-${VERSION}-1.x86_64.rpm" "$VERSION" 1
+```
+
+```sh
+VERSION=0.1.0
+./deploy/build-deb.sh "$VERSION"
+./deploy/check-deb.sh "dist/typemail-milter_${VERSION}-1_amd64.deb" "$VERSION" 1
+```
+
+An optional numeric package release defaults to `1`. Both builds target static Linux AMD64 with `GOAMD64=v1`; RPM uses v4 format and gzip compression. Only the binary, service unit, public TOML template, and empty environment file enter the payload. Local `typemail.toml` and credentials are never copied. Checks inspect metadata, dependencies, file lists, modes, configuration handling, maintainer scripts, templates, and static linkage. These commands do not prove runtime compatibility.
+
+### Maintainer releases
+
+Pull requests build packages using the synthetic version `0.0.2`. Pushed `vMAJOR.MINOR.PATCH` tags run the same Go, inspection, and container lifecycle checks, including the separate CentOS 7 vault job. Prerelease tags are unsupported.
+
+After review and real-system acceptance, tag the accepted commit:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Only the publish job has `contents: write`. It creates a draft for the existing tag, generates release notes, uploads the tested RPM/deb artifacts, then publishes. Reruns reuse identical draft assets and never overwrite published assets. Review the generated notes for migration requirements and runtime limitations. A workflow pass does not establish real-system acceptance. Draft releases are not download targets for the installation commands above.
+
+Read-only checks with GitHub CLI:
+
+```sh
+gh run list --repo julsemaan/typemail --limit 10
+gh release view v0.1.0 --repo julsemaan/typemail --json tagName,isDraft,isPrerelease,assets,url
+```
+
+The tag publication path and container matrix have not been verified this session; no release or runtime validation is claimed here.
+
+### Real-system acceptance
+
+Package compatibility is accepted only after testing on each disposable target with real systemd and Postfix. Test fresh installation, upgrade, downgrade, removal, and Debian purge. Edit both configuration files first and confirm preservation, RPM `.rpmnew`/`.rpmsave` and Debian conffile handling, root-only credential permissions, and retention of the service account. Confirm Debian removal retains configuration and purge removes packaged conffiles and their dpkg backups. Check that installation leaves the service disabled and stopped, upgrades and downgrades preserve its prior running and enablement state, and removal stops and disables it. Confirm startup uses `/usr/bin/typemail-milter`, compare Postfix configuration against a pre-install backup, and run the fail-open staging checks above. Local inspection and container CI alone do not establish runtime compatibility on any target.
 
 Protocol-2 wire tests cover header tagging, bypasses, repeated transactions and aborts, MIME limits, failures, retries, cancellation, and saturation. They cannot verify the real Postfix pipeline or any existing filters; the staging checks above remain required.
 

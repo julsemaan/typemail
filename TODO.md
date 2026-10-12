@@ -2,4 +2,9 @@
 - [x] Configurable classes of emails
 - [x] Structure the code in packages with email policy in `pkg/typemail` and a configurable TypeSafe client in `pkg/typesafe`
 - [ ] RPM and deb builds through GHA with tags and a GH release to publish artifacts
-  - Ensure to adjust the readme to remove the local workflow to install the RPM and create clean docs for both deb and rpm
+  - [x] Add local RPM/deb builds and package inspection scripts.
+  - [x] Document release downloads, package lifecycle, and separate developer builds.
+  - [x] Implement the `vMAJOR.MINOR.PATCH` publish workflow with package checks, targeted container CI, and validated artifacts. Implementation alone does not complete release acceptance.
+  - [ ] Verify a tag publishes a downloadable GitHub Release with the expected RPM/deb assets and release notes.
+  - [ ] Complete real-system package lifecycle, systemd, SELinux enforcing where applicable, and Postfix acceptance on every documented target. Container CI and release publication have not been verified this session.
+  - Keep the parent unchecked until tag publication and real-system acceptance are complete.

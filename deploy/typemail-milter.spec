@@ -1,6 +1,6 @@
 Name:           typemail-milter
 Version:        %{package_version}
-Release:        %{package_release}.el7
+Release:        %{package_release}
 Summary:        Fail-open incoming Postfix subject tagging Milter
 License:        Proprietary
 BuildArch:      x86_64
