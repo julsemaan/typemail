@@ -24,7 +24,7 @@ func validResponse() map[string]any {
 				"choice":     "phishing",
 				"confidence": 0.98,
 				"probabilities": map[string]float64{
-					"legitimate": 0.01,
+					"regular":    0.01,
 					"spam":       0.01,
 					"phishing":   0.98,
 					"selling":    0,
@@ -317,7 +317,7 @@ func TestClassifierConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Class{"Receipts", "legitimate", "newsletter", "phishing", "selling", "spam"}
+	want := []Class{"Receipts", "newsletter", "phishing", "regular", "selling", "spam"}
 	if !reflect.DeepEqual(classifier.Classes(), want) || classifier.criteria["selling"] != criteria {
 		t.Fatalf("classes = %v, criteria = %v", classifier.Classes(), classifier.criteria)
 	}
@@ -392,7 +392,7 @@ func TestConfiguredClassifierRequestAndResponse(t *testing.T) {
 				response := validResponse()
 				answer := response["answers"].(map[string]any)[questionID].(map[string]any)
 				answer["choice"] = "receipts"
-				probabilities := map[string]float64{"receipts": 1, "selling": 0, "spam": 0, "phishing": 0, "legitimate": 0, "newsletter": 0}
+				probabilities := map[string]float64{"receipts": 1, "selling": 0, "spam": 0, "phishing": 0, "regular": 0, "newsletter": 0}
 				answer["probabilities"] = probabilities
 				switch mode {
 				case "disabled choice":

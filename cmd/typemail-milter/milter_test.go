@@ -210,12 +210,12 @@ func TestWireClassification(t *testing.T) {
 		subjectCode, markerCode     byte
 		unchanged                   bool
 	}{
-		{"default", [][2]string{{"Subject", "Hello"}}, typemail.ClassLegitimate, "Hello", "[legitimate] Hello", 'm', 'h', false},
+		{"default", [][2]string{{"Subject", "Hello"}}, typemail.ClassRegular, "Hello", "[regular] Hello", 'm', 'h', false},
 		{"spam", [][2]string{{"Subject", "Offer"}}, typemail.ClassSpam, "Offer", "[spam] Offer", 'm', 'h', false},
 		{"custom", [][2]string{{"Subject", "Release"}}, "project updates", "Release", "[project updates] Release", 'm', 'h', false},
 		{"encoded", [][2]string{{"Subject", "=?UTF-8?B?Y2Fmw6k=?="}}, typemail.ClassNewsletter, "café", "[newsletter] café", 'm', 'h', false},
 		{"missing", nil, typemail.ClassPhishing, "", "[phishing]", 'h', 'h', false},
-		{"retag", [][2]string{{"Subject", "[spam] Hello"}, {markerHeader, "spam"}}, typemail.ClassLegitimate, "Hello", "[legitimate] Hello", 'm', 'm', false},
+		{"retag", [][2]string{{"Subject", "[spam] Hello"}, {markerHeader, "spam"}}, typemail.ClassRegular, "Hello", "[regular] Hello", 'm', 'm', false},
 		{"already tagged", [][2]string{{"Subject", "[spam] Hello"}, {markerHeader, "spam"}}, typemail.ClassSpam, "Hello", "", 0, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -258,7 +258,7 @@ func TestWireClassificationSkipThenNormalTransaction(t *testing.T) {
 		if !reflect.DeepEqual(message.Headers["Subject"], []string{"Fresh"}) || !reflect.DeepEqual(message.TextParts, []typemail.TextPart{{ContentType: "text/plain", Text: "Fresh body"}}) {
 			t.Errorf("stale skipped transaction: %#v", message)
 		}
-		return typemail.Result{Class: typemail.ClassLegitimate}, nil
+		return typemail.Result{Class: typemail.ClassRegular}, nil
 	}, nil))
 	c.connect('4', "203.0.113.5")
 	c.message([][2]string{{"Subject", "[newsletter] Keep"}, {markerHeader, "newsletter"}}, "Skipped body")
@@ -266,7 +266,7 @@ func TestWireClassificationSkipThenNormalTransaction(t *testing.T) {
 		t.Fatalf("skipped classification modified headers: %#v", updates)
 	}
 	c.message([][2]string{{"Subject", "Fresh"}}, "Fresh body")
-	checkUpdates(t, c.finish(), "[legitimate] Fresh", "legitimate", 'm', 'h')
+	checkUpdates(t, c.finish(), "[regular] Fresh", "regular", 'm', 'h')
 	if calls.Load() != 2 {
 		t.Fatalf("classifications = %d, want 2", calls.Load())
 	}

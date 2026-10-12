@@ -20,8 +20,8 @@ import (
 type Class string
 
 const (
-	// ClassLegitimate is expected personal, business, or transactional correspondence.
-	ClassLegitimate Class = "legitimate"
+	// ClassRegular is expected personal, business, or transactional correspondence.
+	ClassRegular Class = "regular"
 	// ClassSpam is unwanted bulk mail, generic solicitation, or low-quality junk.
 	ClassSpam Class = "spam"
 	// ClassPhishing is deceptive mail seeking credentials, money, sensitive data, or harmful actions.
@@ -94,7 +94,7 @@ const (
 )
 
 var classCriteria = map[string]string{
-	string(ClassLegitimate): "Expected personal, business, or transactional correspondence.",
+	string(ClassRegular):    "Expected personal, business, or transactional correspondence.",
 	string(ClassSelling):    "Email that sollicits or promotes a purchase of a consumer product",
 	string(ClassNewsletter): "Expected recurring editorial or informational mail, such as news digests, articles, or community updates. Exclude purchase-focused promotions, unsolicited junk, and deceptive mail.",
 	string(ClassSpam):       "Unwanted bulk mail, generic solicitation, or low-quality junk.",

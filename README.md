@@ -35,7 +35,7 @@ Diagnostics decode only the provider's `error.message` from responses up to 4 Ki
 
 ## Classification categories
 
-- `legitimate`: expected personal, business, or transactional correspondence
+- `regular`: expected personal, business, or transactional correspondence
 - `selling`: email that solicits or promotes a purchase of a consumer product
 - `newsletter`: expected recurring editorial or informational mail, such as news digests, articles, or community updates. Excludes purchase-focused promotions, unsolicited junk, and deceptive mail.
 - `spam`: unwanted bulk mail, generic solicitation, or low-quality junk
@@ -92,7 +92,7 @@ To tag every successfully classified email, including custom classes:
 go run ./cmd/typemail -config typemail.toml -rewrite-subject
 ```
 
-`Your awesome email` becomes `[legitimate] Your awesome email`. The scanner records the class in `X-Typemail-Class`. On reruns it removes only the prefix recorded by that marker, preserves unrelated bracketed text, and skips replacement when the tag already matches. Classification excludes the recorded prefix and never sends the marker to OpenRouter.
+`Your awesome email` becomes `[regular] Your awesome email`. The scanner records the class in `X-Typemail-Class`. On reruns it removes only the prefix recorded by that marker, preserves unrelated bracketed text, and skips replacement when the tag already matches. Classification excludes the recorded prefix and never sends the marker to OpenRouter.
 
 Rewriting requires UIDPLUS or IMAP4rev2 and selects `INBOX` read-write. The scanner snapshots non-deleted UIDs once, so uploaded replacements do not enter the same scan. Classification remains concurrent; one mutex serializes complete IMAP fetch and replacement operations.
 

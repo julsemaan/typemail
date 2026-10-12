@@ -146,7 +146,7 @@ func TestRunRejectsInvalidClassifierConfigBeforeIMAP(t *testing.T) {
 func TestWriteSummaryUsesActiveClasses(t *testing.T) {
 	active := []typemail.Class{"receipts", typemail.ClassSpam}
 	summary := runSummary{
-		counts:   map[typemail.Class]int{"receipts": 2, typemail.ClassLegitimate: 7},
+		counts:   map[typemail.Class]int{"receipts": 2, typemail.ClassRegular: 7},
 		total:    10,
 		failures: 1,
 	}
@@ -417,12 +417,12 @@ func TestOutputSeparatesClassificationAndRewriteSkips(t *testing.T) {
 	input := make(chan classificationResult, 4)
 	input <- classificationResult{uid: 1, result: typemail.Result{Skipped: true, Class: typemail.ClassSpam, Confidence: 0.99}}
 	input <- classificationResult{uid: 2, skipped: "message disappeared", result: typemail.Result{Class: typemail.ClassSpam}}
-	input <- classificationResult{uid: 3, result: typemail.Result{Class: typemail.ClassLegitimate}}
+	input <- classificationResult{uid: 3, result: typemail.Result{Class: typemail.ClassRegular}}
 	input <- classificationResult{uid: 4, err: errors.New("classification failed")}
 	close(input)
 	var stdout, stderr bytes.Buffer
 	summary := outputResults(&stdout, &stderr, input, false)
-	if summary.total != 4 || summary.skipped != 1 || summary.failures != 1 || !reflect.DeepEqual(summary.counts, map[typemail.Class]int{typemail.ClassSpam: 1, typemail.ClassLegitimate: 1}) {
+	if summary.total != 4 || summary.skipped != 1 || summary.failures != 1 || !reflect.DeepEqual(summary.counts, map[typemail.Class]int{typemail.ClassSpam: 1, typemail.ClassRegular: 1}) {
 		t.Fatalf("summary = %#v", summary)
 	}
 	if strings.Contains(stdout.String(), "0.99") || !strings.Contains(stderr.String(), "UID 2: skipped rewrite: message disappeared") {
