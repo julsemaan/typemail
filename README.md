@@ -37,6 +37,7 @@ Diagnostics decode only the provider's `error.message` from responses up to 4 Ki
 
 - `legitimate`: expected personal, business, or transactional correspondence
 - `selling`: email that solicits or promotes a purchase of a consumer product
+- `newsletter`: expected recurring editorial or informational mail, such as news digests, articles, or community updates. Excludes purchase-focused promotions, unsolicited junk, and deceptive mail.
 - `spam`: unwanted bulk mail, generic solicitation, or low-quality junk
 - `phishing`: deceptive requests for credentials, money, sensitive data, or harmful actions
 - `suspicious`: concerning or ambiguous mail that does not clearly fit another category

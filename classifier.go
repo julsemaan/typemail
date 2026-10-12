@@ -29,6 +29,8 @@ const (
 	ClassSuspicious Class = "suspicious"
 	// ClassSelling
 	ClassSelling Class = "selling"
+	// ClassNewsletter is recurring editorial or informational mail.
+	ClassNewsletter Class = "newsletter"
 )
 
 // Result is the classification and probability distribution returned by Jev.
@@ -89,6 +91,7 @@ const (
 var classCriteria = map[string]string{
 	string(ClassLegitimate): "Expected personal, business, or transactional correspondence.",
 	string(ClassSelling):    "Email that sollicits or promotes a purchase of a consumer product",
+	string(ClassNewsletter): "Expected recurring editorial or informational mail, such as news digests, articles, or community updates. Exclude purchase-focused promotions, unsolicited junk, and deceptive mail.",
 	string(ClassSpam):       "Unwanted bulk mail, generic solicitation, or low-quality junk.",
 	string(ClassPhishing):   "Deceptive requests for credentials, money, sensitive data, or harmful actions.",
 	string(ClassSuspicious): "Concerning or ambiguous mail that does not clearly fit another class.",

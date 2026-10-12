@@ -28,6 +28,7 @@ func validResponse() map[string]any {
 					"spam":       0.01,
 					"phishing":   0.98,
 					"selling":    0,
+					"newsletter": 0,
 					"suspicious": 0,
 				},
 			},
@@ -79,7 +80,7 @@ func TestClassifierRequestAndResponse(t *testing.T) {
 		if !ok || question.Type != "choice" || question.Instructions == "" {
 			t.Errorf("question = %#v", question)
 		}
-		if len(question.Criteria) != 5 || question.Criteria["phishing"] == "" {
+		if len(question.Criteria) != 6 || question.Criteria["phishing"] == "" {
 			t.Errorf("criteria = %#v", question.Criteria)
 		}
 		writeJSON(t, w, validResponse())
@@ -99,7 +100,7 @@ func TestClassifierRequestAndResponse(t *testing.T) {
 	if result.Class != ClassPhishing || result.Confidence != 0.98 || result.Model != "typesafe/jev-1.13" {
 		t.Fatalf("result = %#v", result)
 	}
-	if len(result.Probabilities) != 5 || result.Probabilities[ClassPhishing] != 0.98 {
+	if len(result.Probabilities) != 6 || result.Probabilities[ClassPhishing] != 0.98 {
 		t.Fatalf("probabilities = %#v", result.Probabilities)
 	}
 }
@@ -235,7 +236,7 @@ func TestClassifierConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Class{"Receipts", "legitimate", "phishing", "selling", "spam"}
+	want := []Class{"Receipts", "legitimate", "newsletter", "phishing", "selling", "spam"}
 	if !reflect.DeepEqual(classifier.Classes(), want) || classifier.criteria["selling"] != criteria {
 		t.Fatalf("classes = %v, criteria = %v", classifier.Classes(), classifier.criteria)
 	}
@@ -248,7 +249,7 @@ func TestClassifierConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(classifier.Classes(), want) || classifier.criteria["selling"] != "Purchase receipts." || other.criteria["selling"] != classCriteria["selling"] || len(other.Classes()) != 5 {
+	if !reflect.DeepEqual(classifier.Classes(), want) || classifier.criteria["selling"] != "Purchase receipts." || other.criteria["selling"] != classCriteria["selling"] || len(other.Classes()) != 6 {
 		t.Fatal("classifiers share mutable configuration")
 	}
 	for _, cfg := range []ClassifierConfig{{}, {Classes: map[string]ClassConfig{}}, {Classes: map[string]ClassConfig{"selling": {}}}} {
@@ -310,7 +311,7 @@ func TestConfiguredClassifierRequestAndResponse(t *testing.T) {
 				response := validResponse()
 				answer := response["answers"].(map[string]any)[questionID].(map[string]any)
 				answer["choice"] = "receipts"
-				probabilities := map[string]float64{"receipts": 1, "selling": 0, "spam": 0, "phishing": 0, "legitimate": 0}
+				probabilities := map[string]float64{"receipts": 1, "selling": 0, "spam": 0, "phishing": 0, "legitimate": 0, "newsletter": 0}
 				answer["probabilities"] = probabilities
 				switch mode {
 				case "disabled choice":
@@ -327,13 +328,48 @@ func TestConfiguredClassifierRequestAndResponse(t *testing.T) {
 			classifier.endpoint, classifier.client = server.URL, server.Client()
 			result, err := classifier.Classify(context.Background(), Message{})
 			if mode == "valid" {
-				if err != nil || result.Class != "receipts" || result.Probabilities["receipts"] != 1 || len(result.Probabilities) != 5 {
+				if err != nil || result.Class != "receipts" || result.Probabilities["receipts"] != 1 || len(result.Probabilities) != 6 {
 					t.Fatalf("result = %#v, error = %v", result, err)
 				}
 			} else if err == nil {
 				t.Fatal("accepted invalid response")
 			}
 		})
+	}
+}
+
+func TestNewsletterClass(t *testing.T) {
+	classifier, server := classifierForServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request classifyRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if request.Questions[questionID].Criteria["newsletter"] == "" {
+			t.Error("request has no newsletter criteria")
+		}
+		response := validResponse()
+		answer := response["answers"].(map[string]any)[questionID].(map[string]any)
+		answer["choice"] = "newsletter"
+		probabilities := answer["probabilities"].(map[string]float64)
+		probabilities["phishing"], probabilities["newsletter"] = 0, 0.98
+		writeJSON(t, w, response)
+	}))
+	defer server.Close()
+	result, err := classifier.Classify(context.Background(), Message{})
+	if err != nil || result.Class != ClassNewsletter || result.Probabilities[ClassNewsletter] != 0.98 {
+		t.Fatalf("result = %#v, error = %v", result, err)
+	}
+	criteria, disabled := "Editorial newsletters only.", false
+	for _, config := range []ClassConfig{{}, {Criteria: &criteria}, {Enabled: &disabled}} {
+		c, err := NewClassifierWithConfig("key", ClassifierConfig{Classes: map[string]ClassConfig{"newsletter": config}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, active := c.parseClass("newsletter")
+		if active != (config.Enabled == nil) || config.Criteria != nil && c.criteria["newsletter"] != criteria {
+			t.Fatalf("newsletter config = %#v, criteria = %v", config, c.criteria)
+		}
 	}
 }
 
