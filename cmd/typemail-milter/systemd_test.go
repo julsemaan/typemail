@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -112,8 +113,21 @@ func TestNotificationDeadlineAndCancellation(t *testing.T) {
 	if _, _, err := receiver.ReadFromUnix(b[:]); err == nil {
 		t.Fatal("cancelled readiness delivered")
 	}
+	attempts := 100
+	if runtime.GOOS == "linux" {
+		data, err := os.ReadFile("/proc/sys/net/unix/max_dgram_qlen")
+		if err != nil {
+			t.Fatalf("read max_dgram_qlen: %v", err)
+		}
+		limit, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil {
+			t.Fatalf("parse max_dgram_qlen: %v", err)
+		}
+		// Linux accepts limit + 1 datagrams before blocking the next write.
+		attempts = limit + 2
+	}
 	// Fill the receiver queue to exercise a blocked datagram write, not just dial failure.
-	for i := 0; i < 100; i++ {
+	for i := 0; i < attempts; i++ {
 		start := time.Now()
 		err := n.notify(context.Background(), "WATCHDOG=1")
 		if time.Since(start) > 500*time.Millisecond {
