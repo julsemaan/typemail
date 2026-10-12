@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"typemail"
+	"typemail/pkg/typemail"
 )
 
 func notificationSocket(t *testing.T, abstract bool) (string, *net.UnixConn) {

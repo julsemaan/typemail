@@ -12,8 +12,8 @@ import (
 
 	messagetext "github.com/emersion/go-message/textproto"
 	"github.com/emersion/go-milter"
-	"typemail"
 	"typemail/internal/cli"
+	"typemail/pkg/typemail"
 )
 
 const (

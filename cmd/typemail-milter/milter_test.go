@@ -18,8 +18,9 @@ import (
 	"time"
 
 	"github.com/emersion/go-milter"
-	"typemail"
 	"typemail/internal/cli"
+	"typemail/pkg/typemail"
+	"typemail/pkg/typesafe"
 )
 
 // These helpers speak protocol 2 directly, including its terminal Continue at EOM.
@@ -571,20 +572,6 @@ func TestHeaderWriteFailureResetsAfterBody(t *testing.T) {
 	}
 }
 
-// The classifier's client uses http.DefaultTransport. Redirect only this test's
-// provider requests to localhost without exposing classifier internals.
-type outageTransport struct {
-	target string
-	base   http.RoundTripper
-}
-
-func (tr outageTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	clone := req.Clone(req.Context())
-	url := *req.URL
-	clone.URL = &url
-	clone.URL.Scheme, clone.URL.Host = "http", tr.target
-	return tr.base.RoundTrip(clone)
-}
 func TestWireHTTPProviderOutage(t *testing.T) {
 	var requests atomic.Int32
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -592,10 +579,16 @@ func TestWireHTTPProviderOutage(t *testing.T) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
 	defer provider.Close()
-	previous := http.DefaultTransport
-	http.DefaultTransport = outageTransport{target: strings.TrimPrefix(provider.URL, "http://"), base: previous}
-	defer func() { http.DefaultTransport = previous }()
-	classifier, err := typemail.NewClassifier("test-key")
+	client, err := typesafe.New(typesafe.Config{
+		Endpoint:   provider.URL,
+		Model:      cli.DefaultJevModel,
+		APIKey:     "test-key",
+		HTTPClient: provider.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	classifier, err := typemail.New(client, typemail.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

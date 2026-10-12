@@ -12,7 +12,7 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
-	"typemail"
+	"typemail/pkg/typemail"
 )
 
 // prepareMailbox snapshots eligible UIDs before any replacements are uploaded.

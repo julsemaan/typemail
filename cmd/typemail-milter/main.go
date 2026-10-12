@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"typemail"
 	"typemail/internal/cli"
+	"typemail/pkg/typemail"
 )
 
 const listenAddress = "127.0.0.1:8892"
@@ -58,7 +58,7 @@ func loadClassifier(args []string, getenv func(string) string) (*typemail.Classi
 	if err != nil {
 		return nil, err
 	}
-	return typemail.NewClassifierWithConfig(getenv("OPENROUTER_API_KEY"), cfg)
+	return cli.NewClassifier(getenv("OPENROUTER_API_KEY"), cfg)
 }
 
 func run(ctx context.Context, classifier *typemail.Classifier, notifier systemdNotifier) error {

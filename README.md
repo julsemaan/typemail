@@ -116,9 +116,22 @@ The scanner sends a `POST` request to `https://openrouter.ai/api/v1/systemone` u
 
 ## Library
 
+Email policy and MIME handling live in `typemail/pkg/typemail`. The configurable TypeSafe choice client lives in `typemail/pkg/typesafe` and has no email dependency. The root has no Go API.
+
 ```go
+import (
+    "typemail/pkg/typemail"
+    "typemail/pkg/typesafe"
+)
+
+// Check each error before using the returned value.
+client, err := typesafe.New(typesafe.Config{
+    Endpoint: "https://openrouter.ai/api/v1/systemone",
+    Model:    "~typesafe/jev-latest",
+    APIKey:   apiKey,
+})
 message, err := typemail.ParseMessage(reader, 100<<10)
-classifier, err := typemail.NewClassifier(apiKey)
+classifier, err := typemail.New(client, typemail.Config{})
 result, err := classifier.Classify(ctx, message)
 ```
 
@@ -127,7 +140,7 @@ To configure the library, set `SkipSenderDomains` for the sender bypass and use 
 ```go
 criteria := "Purchase confirmations, invoices, and payment receipts."
 enabled := false
-classifier, err := typemail.NewClassifierWithConfig(apiKey, typemail.ClassifierConfig{
+classifier, err := typemail.New(client, typemail.Config{
     SkipSenderDomains: []string{"semaan.ca"},
     Classes: map[string]typemail.ClassConfig{
         "receipts":   {Criteria: &criteria},
@@ -136,11 +149,15 @@ classifier, err := typemail.NewClassifierWithConfig(apiKey, typemail.ClassifierC
 })
 ```
 
-`NewClassifier` preserves defaults. `NewClassifierWithConfig` validates and copies the configuration. `classifier.Classes()` returns a fresh, sorted slice of active names. Custom results use `typemail.Class` with the configured name. For a sender-domain bypass, `Classify` returns `Result.Skipped = true` with all remaining result fields empty or zero and a nil error. Callers must check `Skipped` before treating the result as a classification.
+`typemail.New` validates and copies the configuration; `typemail.Config{}` preserves defaults. `typemail.ValidateConfig` uses the same validation without requiring credentials. `classifier.Classes()` returns a fresh, sorted slice of active names. Custom results use `typemail.Class` with the configured name. For a sender-domain bypass, `Classify` returns `Result.Skipped = true` with all remaining result fields empty or zero and a nil error. Callers must check `Skipped` before treating the result as a classification.
 
 Library callers choose their own body limit through the `ParseMessage` argument; the CLI default does not apply.
 
-The library uses `github.com/emersion/go-imap/v2` for IMAP integration and `github.com/emersion/go-message` for RFC 822 and MIME parsing. It does not include an OpenRouter SDK.
+Alternate TypeSafe/Jev hosts supply their own endpoint, model, and credentials through `typesafe.Config`. An optional `HTTPClient` supplies transport settings. The client refuses redirects even when injected, without mutating the caller's HTTP client. `Choose` accepts state, instructions, and criteria and returns a validated choice, confidence, probability distribution, and model. HTTP retries, cancellation, response limits, and opt-in `typesafe.HTTPError` diagnostics stay in this package.
+
+Both commands share the current OpenRouter defaults through `internal/cli`; their flags and `OPENROUTER_API_KEY` remain unchanged. This refactor adds no provider implementations.
+
+The commands use `github.com/emersion/go-imap/v2` for IMAP integration; `pkg/typemail` uses `github.com/emersion/go-message` for RFC 822 and MIME parsing. No new dependencies or modules are needed.
 
 ## Incoming Postfix subject tagging
 

@@ -2,20 +2,44 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/BurntSushi/toml"
-	"typemail"
+	"typemail/pkg/typemail"
+	"typemail/pkg/typesafe"
 )
 
 const (
-	DefaultConcurrency   = 5
-	DefaultMaxEmailBytes = 16 << 10
+	DefaultConcurrency        = 5
+	DefaultMaxEmailBytes      = 16 << 10
+	DefaultOpenRouterEndpoint = "https://openrouter.ai/api/v1/systemone"
+	DefaultJevModel           = "~typesafe/jev-latest"
 )
 
+// NewClassifier validates email policy before constructing the provider client.
+func NewClassifier(apiKey string, cfg typemail.Config) (*typemail.Classifier, error) {
+	if err := typemail.ValidateConfig(cfg); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		return nil, errors.New("openrouter API key is required")
+	}
+	client, err := typesafe.New(typesafe.Config{
+		Endpoint: DefaultOpenRouterEndpoint,
+		Model:    DefaultJevModel,
+		APIKey:   apiKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return typemail.New(client, cfg)
+}
+
 // LoadClassifierConfig strictly decodes and validates an optional TOML file.
-func LoadClassifierConfig(path string) (typemail.ClassifierConfig, error) {
-	var cfg typemail.ClassifierConfig
+func LoadClassifierConfig(path string) (typemail.Config, error) {
+	var cfg typemail.Config
 	if path != "" {
 		metadata, err := toml.DecodeFile(path, &cfg)
 		if err != nil {
@@ -34,8 +58,7 @@ func LoadClassifierConfig(path string) (typemail.ClassifierConfig, error) {
 			}
 		}
 	}
-	// Reuse the classifier's semantic validation without making any requests.
-	if _, err := typemail.NewClassifierWithConfig("config-validation", cfg); err != nil {
+	if err := typemail.ValidateConfig(cfg); err != nil {
 		return cfg, err
 	}
 	return cfg, nil

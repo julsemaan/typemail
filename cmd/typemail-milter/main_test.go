@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"typemail"
+	"typemail/pkg/typemail"
 )
 
 func TestSuperviseLifecycle(t *testing.T) {

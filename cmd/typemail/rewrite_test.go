@@ -19,7 +19,7 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
-	"typemail"
+	"typemail/pkg/typemail"
 )
 
 // Each script ends with a NOOP barrier. Unexpected mutations therefore fail

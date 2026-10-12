@@ -16,8 +16,9 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
-	"typemail"
 	"typemail/internal/cli"
+	"typemail/pkg/typemail"
+	"typemail/pkg/typesafe"
 )
 
 const (
@@ -37,7 +38,7 @@ type config struct {
 	maxEmailBytes    int64
 	debug            bool
 	rewriteSubject   bool
-	classifierConfig typemail.ClassifierConfig
+	classifierConfig typemail.Config
 }
 
 func loadConfig(args []string, getenv func(string) string) (config, error) {
@@ -227,7 +228,7 @@ func outputResults(stdout, stderr io.Writer, results <-chan classificationResult
 			summary.failures++
 			_, _ = fmt.Fprintf(stderr, "UID %d: %v\n", result.uid, result.err)
 			if debug {
-				var detail *typemail.HTTPError
+				var detail *typesafe.HTTPError
 				if errors.As(result.err, &detail) {
 					explanation := "message=" + detail.Message
 					if detail.DetailsUnavailable != "" {
@@ -272,7 +273,7 @@ func writeSummary(w io.Writer, summary runSummary, active []typemail.Class) {
 }
 
 func run(ctx context.Context, cfg config, stdout, stderr io.Writer) error {
-	classifier, err := typemail.NewClassifierWithConfig(cfg.openRouterKey, cfg.classifierConfig)
+	classifier, err := cli.NewClassifier(cfg.openRouterKey, cfg.classifierConfig)
 	if err != nil {
 		return err
 	}

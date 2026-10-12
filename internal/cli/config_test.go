@@ -5,7 +5,26 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"typemail/pkg/typemail"
 )
+
+func TestNewClassifier(t *testing.T) {
+	criteria := ""
+	cfg := typemail.Config{Classes: map[string]typemail.ClassConfig{
+		"receipts": {Criteria: &criteria},
+	}}
+	wantErr := typemail.ValidateConfig(cfg)
+	if _, err := NewClassifier("", cfg); err == nil || err.Error() != wantErr.Error() {
+		t.Fatalf("error = %v, want config validation error %v", err, wantErr)
+	}
+	if _, err := NewClassifier(" \t", typemail.Config{}); err == nil || err.Error() != "openrouter API key is required" {
+		t.Fatalf("missing key error = %v", err)
+	}
+	if _, err := NewClassifier("key", typemail.Config{}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestLoadClassifierConfig(t *testing.T) {
 	for _, tc := range []struct {

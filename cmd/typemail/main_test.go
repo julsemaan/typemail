@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/emersion/go-imap/v2"
-	"typemail"
+	"typemail/internal/cli"
+	"typemail/pkg/typemail"
+	"typemail/pkg/typesafe"
 )
 
 func testEnvironment(values map[string]string) func(string) string {
@@ -33,7 +35,7 @@ func completeEnvironment() map[string]string {
 
 func defaultClasses(t *testing.T) []typemail.Class {
 	t.Helper()
-	classifier, err := typemail.NewClassifier("key")
+	classifier, err := cli.NewClassifier("key", typemail.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +75,7 @@ func TestLoadConfigClassifierFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			classifier, err := typemail.NewClassifierWithConfig("key", cfg.classifierConfig)
+			classifier, err := cli.NewClassifier("key", cfg.classifierConfig)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -129,11 +131,11 @@ func TestRunRejectsInvalidClassifierConfigBeforeIMAP(t *testing.T) {
 	cfg := config{
 		openRouterKey: "key",
 		imapAddr:      "invalid IMAP address",
-		classifierConfig: typemail.ClassifierConfig{Classes: map[string]typemail.ClassConfig{
+		classifierConfig: typemail.Config{Classes: map[string]typemail.ClassConfig{
 			"receipts": {Criteria: &criteria},
 		}},
 	}
-	_, wantErr := typemail.NewClassifierWithConfig(cfg.openRouterKey, cfg.classifierConfig)
+	wantErr := typemail.ValidateConfig(cfg.classifierConfig)
 	if wantErr == nil {
 		t.Fatal("empty custom criteria should be invalid")
 	}
@@ -262,10 +264,10 @@ func TestLoadConfigDebugIsOptIn(t *testing.T) {
 func TestOutputHTTPDiagnostics(t *testing.T) {
 	for _, debug := range []bool{false, true} {
 		input := make(chan classificationResult, 4)
-		input <- classificationResult{uid: 64866, err: fmt.Errorf("classify: %w", &typemail.HTTPError{
+		input <- classificationResult{uid: 64866, err: fmt.Errorf("classify: %w", &typesafe.HTTPError{
 			StatusCode: 400, Message: "private email\x1b[31m\nforged\r\t\u009b", Model: "jev\nmodel", StateBytes: 123, RequestBytes: 456,
 		})}
-		input <- classificationResult{uid: 64867, err: &typemail.HTTPError{StatusCode: 400, DetailsUnavailable: "malformed error response"}}
+		input <- classificationResult{uid: 64867, err: &typesafe.HTTPError{StatusCode: 400, DetailsUnavailable: "malformed error response"}}
 		input <- classificationResult{uid: 9, err: errors.New("parse failed")}
 		input <- classificationResult{uid: 10, from: "sender", subject: "subject", result: typemail.Result{Class: typemail.ClassSpam, Confidence: 0.94}}
 		close(input)

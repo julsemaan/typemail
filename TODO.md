@@ -1,5 +1,5 @@
 - [ ] Support other providers than openrouter
 - [x] Configurable classes of emails
-- [ ] Structure the code in packages and beyond a prototype
+- [x] Structure the code in packages with email policy in `pkg/typemail` and a configurable TypeSafe client in `pkg/typesafe`
 - [ ] RPM and deb builds through GHA with tags and a GH release to publish artifacts
   - Ensure to adjust the readme to remove the local workflow to install the RPM and create clean docs for both deb and rpm
