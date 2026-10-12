@@ -326,7 +326,7 @@ go vet ./...
 
 ### Developer package builds
 
-Build on a supported Linux host with Go 1.23 or newer and Bash, not CentOS 7. RPM builds need `rpmbuild`; inspection needs `rpm`, `rpm2cpio`, `cpio`, and binutils `readelf`. Debian builds need `dpkg-deb`; inspection also needs `tar` and `readelf`.
+Build on a supported Linux host with Go 1.27.2 or newer and Bash, not CentOS 7. RPM builds need `rpmbuild`; inspection needs `rpm`, `rpm2cpio`, `cpio`, and binutils `readelf`. Debian builds need `dpkg-deb`; inspection also needs `tar` and `readelf`.
 
 ```sh
 VERSION=0.1.0

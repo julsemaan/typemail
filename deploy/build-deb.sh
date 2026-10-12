@@ -12,8 +12,8 @@ for tool in go dpkg-deb; do
     command -v "$tool" >/dev/null || { echo "Required tool: $tool" >&2; exit 1; }
 done
 go_version=$(go env GOVERSION)
-if [[ ! $go_version =~ ^go([0-9]+)\.([0-9]+) ]] || (( BASH_REMATCH[1] < 1 || (BASH_REMATCH[1] == 1 && BASH_REMATCH[2] < 23) )); then
-    echo 'Go 1.23 or newer is required.' >&2
+if [[ ! $go_version =~ ^go([0-9]+)\.([0-9]+) ]] || (( BASH_REMATCH[1] < 1 || (BASH_REMATCH[1] == 1 && BASH_REMATCH[2] < 27) )); then
+    echo 'Go 1.27.2 or newer is required.' >&2
     exit 1
 fi
 root=$(cd "$(dirname "$0")/.." && pwd)
