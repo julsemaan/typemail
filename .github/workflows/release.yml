@@ -102,7 +102,7 @@ jobs:
           - {image: 'quay.io/centos/centos:stream10', format: rpm}
           - {image: 'rockylinux:8', format: rpm}
           - {image: 'rockylinux:9', format: rpm}
-          - {image: 'rockylinux:10', format: rpm}
+          - {image: 'rockylinux/rockylinux:10', format: rpm}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
