@@ -34,7 +34,7 @@ Version: $version-$release
 Section: mail
 Priority: optional
 Architecture: amd64
-Maintainer: Typemail <typemail@localhost>
+Maintainer: Julien Semaan <jul.semaan@gmail.com>
 Depends: postfix, systemd, ca-certificates, passwd, libc-bin
 Description: Fail-open incoming Postfix subject tagging Milter
  Tags incoming email subjects using OpenRouter. Runs as an unprivileged
