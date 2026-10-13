@@ -205,12 +205,11 @@ After either installation, as root:
 # Edit /etc/typemail/milter.env to contain OPENROUTER_API_KEY=your-key.
 # Use an editor, not shell history. The file starts empty and is root-only.
 # Optionally edit /etc/typemail/typemail.toml to customize classes and sender bypasses.
-systemctl enable typemail-milter
-systemctl start typemail-milter
+systemctl restart typemail-milter
 journalctl -u typemail-milter
 ```
 
-Both packages install `/usr/bin/typemail-milter` and `/usr/lib/systemd/system/typemail-milter.service` and create the system account and group if absent. Dependencies include Postfix, systemd, CA certificates, and account-management tools. `/etc/typemail` is `root:typemail` with mode `0750`; `typemail.toml` is `root:typemail` with mode `0640`; `milter.env` is `root:root` with mode `0600`. Installation reloads systemd but never enables or starts the service and never changes Postfix configuration.
+Both packages install `/usr/bin/typemail-milter` and `/usr/lib/systemd/system/typemail-milter.service` and create the system account and group if absent. Dependencies include Postfix, systemd, CA certificates, and account-management tools. `/etc/typemail` is `root:typemail` with mode `0750`; `typemail.toml` is `root:typemail` with mode `0640`; `milter.env` is `root:root` with mode `0600`. Installation reloads systemd, enables the service on boot, and restarts it without changing Postfix configuration. A fresh installation cannot start successfully until you set the API key. Service-command failures do not fail package installation; check the journal after configuring credentials and restarting.
 
 On SELinux systems, keep enforcing mode enabled. Verify startup and mail delivery, inspect audit logs for denials, and check policy and port labels if required by the host's policy. Do not disable SELinux or apply an unverified policy to make the service run.
 
@@ -242,7 +241,7 @@ cp -p /etc/typemail/classes.toml /etc/typemail/typemail.toml
 
 If the destination already exists, back it up and merge your settings rather than overwriting it. Download the desired release using the commands above with a new `VERSION`, then install it with `dnf install`, legacy `yum localinstall`, or `apt install` as appropriate.
 
-Upgrades and downgrades do not restart the daemon or change its enablement. Explicitly run `systemctl restart typemail-milter` after changing packages to activate the selected binary. RPM uses `%config(noreplace)` for both configuration files; retain local edits and review `.rpmnew` files. Debian packages register both files as conffiles; keep local versions when prompted and review `.dpkg-dist` or `.dpkg-old` files before merging template changes.
+Installing, upgrading, or downgrading to these packages enables the service on boot and restarts it to activate the selected binary, even if it was previously stopped or disabled. Older packages may still require an explicit `systemctl restart typemail-milter`. RPM uses `%config(noreplace)` for both configuration files; retain local edits and review `.rpmnew` files. Debian packages register both files as conffiles; keep local versions when prompted and review `.dpkg-dist` or `.dpkg-old` files before merging template changes.
 
 Before downgrading to a package using `classes.toml`, reverse the copy as root. Back up any existing destination first, then remove `skip_sender_domains` from the copied file because older versions do not support it:
 
@@ -366,7 +365,7 @@ The tag publication path and container matrix have not been verified this sessio
 
 ### Real-system acceptance
 
-Package compatibility is accepted only after testing on each disposable target with real systemd and Postfix. Test fresh installation, upgrade, downgrade, removal, and Debian purge. Edit both configuration files first and confirm preservation, RPM `.rpmnew`/`.rpmsave` and Debian conffile handling, root-only credential permissions, and retention of the service account. Confirm Debian removal retains configuration and purge removes packaged conffiles and their dpkg backups. Check that installation leaves the service disabled and stopped, upgrades and downgrades preserve its prior running and enablement state, and removal stops and disables it. Confirm startup uses `/usr/bin/typemail-milter`, compare Postfix configuration against a pre-install backup, and run the fail-open staging checks above. Local inspection and container CI alone do not establish runtime compatibility on any target.
+Package compatibility is accepted only after testing on each disposable target with real systemd and Postfix. Test fresh installation, upgrade, downgrade, removal, and Debian purge. Edit both configuration files first and confirm preservation, RPM `.rpmnew`/`.rpmsave` and Debian conffile handling, root-only credential permissions, and retention of the service account. Confirm Debian removal retains configuration and purge removes packaged conffiles and their dpkg backups. Check that installation enables the service on boot and attempts startup, upgrades and downgrades enable and restart it even if previously stopped or disabled, and removal stops and disables it. Configure valid credentials before verifying the running state. Confirm startup uses `/usr/bin/typemail-milter`, compare Postfix configuration against a pre-install backup, and run the fail-open staging checks above. Local inspection and container CI alone do not establish runtime compatibility on any target.
 
 Protocol-2 wire tests cover header tagging, bypasses, repeated transactions and aborts, MIME limits, failures, retries, cancellation, and saturation. They cannot verify the real Postfix pipeline or any existing filters; the staging checks above remain required.
 

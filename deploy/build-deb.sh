@@ -58,6 +58,8 @@ if [ "$1" = configure ]; then
         chmod 0600 /etc/typemail/milter.env
     fi
     systemctl daemon-reload >/dev/null 2>&1 || :
+    systemctl enable typemail-milter.service >/dev/null 2>&1 || :
+    systemctl restart typemail-milter.service >/dev/null 2>&1 || :
 fi
 EOF
 cat > "$work/package/DEBIAN/prerm" <<'EOF'

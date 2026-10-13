@@ -14,7 +14,7 @@ if [[ $package == *.deb ]]; then
     install_package() {
         : > /tmp/systemctl-calls
         apt-get install -y --allow-downgrades -o Dpkg::Options::=--force-confold "$1"
-        check_no_activation
+        check_activation_calls
     }
     remove_package() {
         : > /tmp/systemctl-calls
@@ -28,7 +28,7 @@ else
     install_package() {
         : > /tmp/systemctl-calls
         "$manager" install -y "$1"
-        check_no_activation
+        check_activation_calls
     }
     remove_package() {
         : > /tmp/systemctl-calls
@@ -45,9 +45,11 @@ printf '%s\n' "\$*" >> /tmp/systemctl-calls
 exec "$systemctl_path.real" "\$@"
 EOF
 chmod 0755 "$systemctl_path"
-check_no_activation() {
-    grep -Fxq daemon-reload /tmp/systemctl-calls
-    if grep -Ev '^daemon-reload$' /tmp/systemctl-calls; then
+check_activation_calls() {
+    for call in daemon-reload 'enable typemail-milter.service' 'restart typemail-milter.service'; do
+        grep -Fxq "$call" /tmp/systemctl-calls
+    done
+    if grep -Ev '^(daemon-reload|enable typemail-milter\.service|restart typemail-milter\.service)$' /tmp/systemctl-calls; then
         echo 'Unexpected systemctl call during installation.' >&2
         exit 1
     fi
@@ -78,11 +80,11 @@ check_install() {
 # Exercise the legacy .el7 -> neutral RPM path before reinstalling the release.
 install_package "$older"
 check_install
-[[ ! -e /etc/systemd/system/multi-user.target.wants/typemail-milter.service ]]
+[[ -L /etc/systemd/system/multi-user.target.wants/typemail-milter.service ]]
 printf '\n# local configuration\n' >> /etc/typemail/typemail.toml
 printf 'OPENROUTER_API_KEY=smoke-test-not-a-secret\n' > /etc/typemail/milter.env
 sha256sum /etc/typemail/{typemail.toml,milter.env} > /tmp/config-before
-systemctl enable typemail-milter.service
+systemctl disable typemail-milter.service
 install_package "$package"
 check_install
 sha256sum -c /tmp/config-before
@@ -92,7 +94,7 @@ if [[ $package == *.deb ]]; then
 else
     : > /tmp/systemctl-calls
     "$manager" downgrade -y "$older"
-    check_no_activation
+    check_activation_calls
 fi
 check_install
 sha256sum -c /tmp/config-before
@@ -117,7 +119,7 @@ fi
 install_package "$package"
 check_install
 [[ ! -s /etc/typemail/milter.env ]]
-[[ ! -e /etc/systemd/system/multi-user.target.wants/typemail-milter.service ]]
+[[ -L /etc/systemd/system/multi-user.target.wants/typemail-milter.service ]]
 remove_package
 if [[ $package == *.deb ]]; then dpkg --purge typemail-milter; fi
 getent passwd typemail

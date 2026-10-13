@@ -42,6 +42,8 @@ getent passwd typemail >/dev/null || /usr/sbin/useradd --system --gid typemail -
 
 %post
 /bin/systemctl daemon-reload >/dev/null 2>&1 || :
+/bin/systemctl enable typemail-milter.service >/dev/null 2>&1 || :
+/bin/systemctl restart typemail-milter.service >/dev/null 2>&1 || :
 
 %preun
 if [ "$1" -eq 0 ]; then
